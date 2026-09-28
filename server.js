@@ -50,32 +50,28 @@ function normalizeCard(card, lang) {
   };
 }
 
-// Sucht Karten in einer bestimmten TCGdex-Sprache (Brief-Liste), holt
-// danach pro Treffer parallel die Detailansicht (für Set-Name + echte
-// Cardmarket-Preise, die in der Brief-Liste nicht enthalten sind).
-async function searchInLang(lang, name, set) {
-  const params = new URLSearchParams();
-  params.set('name', name); // Default = "laxist" Teilstring-Suche
-  if (set) params.set('set.name', `like:${set}`);
-  params.set('pagination:itemsPerPage', '24');
+// Sucht Karten in einer bestimmten TCGdex-Sprache und liefert nur die
+// schlanke Brief-Liste (id, name, image) zurück — schnell, für den
+// ersten Abgleich zwischen Sprachen.
+async function searchBriefs(lang, name, set) {
+  try {
+    const params = new URLSearchParams();
+    params.set('name', name); // Default = "laxist" Teilstring-Suche
+    if (set) params.set('set.name', `like:${set}`);
+    params.set('pagination:itemsPerPage', '48');
 
-  const listRes = await axios.get(`${TCGDEX_BASE}/${lang}/cards?${params.toString()}`, { timeout: 10000 });
-  const briefs = Array.isArray(listRes.data) ? listRes.data : [];
-  if (briefs.length === 0) return [];
+    const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards?${params.toString()}`, { timeout: 10000 });
+    return Array.isArray(res.data) ? res.data : [];
+  } catch (e) {
+    // Eine fehlschlagende Sprache darf die andere nicht mit runterreißen.
+    console.error(`TCGdex Brief-Suche (${lang}) fehlgeschlagen:`, e.response?.status || e.message);
+    return [];
+  }
+}
 
-  const detailed = await Promise.all(
-    briefs.map(async (brief) => {
-      try {
-        const detailRes = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${brief.id}`, { timeout: 10000 });
-        return normalizeCard(detailRes.data, lang);
-      } catch (e) {
-        // Wenn die Detailanfrage fehlschlägt, lieber die Karte ohne
-        // Preis/Set zeigen als sie ganz wegzulassen.
-        return normalizeCard(brief, lang);
-      }
-    })
-  );
-  return detailed;
+async function fetchDetail(lang, id) {
+  const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${id}`, { timeout: 10000 });
+  return normalizeCard(res.data, lang);
 }
 
 app.get('/api/cards', async (req, res) => {
@@ -87,14 +83,41 @@ app.get('/api/cards', async (req, res) => {
     const cleanName = name.trim();
     const cleanSet = set ? set.trim() : '';
 
-    // Erst auf Deutsch suchen (passend zur App), bei 0 Treffern auf
-    // Englisch zurückfallen (breiteste Set-Abdeckung, u.a. ältere/
-    // Promo-Sets, die nicht immer deutsch vorliegen).
-    let results = await searchInLang('de', cleanName, cleanSet);
-    if (results.length === 0) {
-      results = await searchInLang('en', cleanName, cleanSet);
+    // Deutsch UND Englisch parallel durchsuchen. TCGdex hat für Deutsch
+    // keine vollständige Abdeckung (ältere/Promo-Sets fehlen teils) —
+    // statt bei 0 deutschen Treffern komplett auf Englisch umzuschalten
+    // (was wie "Deutsch geht nicht" wirkt), werden beide Ergebnislisten
+    // anhand der sprachunabhängigen Karten-ID zusammengeführt: existiert
+    // eine Karte auf Deutsch, wird sie deutsch angezeigt; existiert sie
+    // nur auf Englisch, wird sie eben englisch angezeigt statt gar nicht.
+    const [deBriefs, enBriefs] = await Promise.all([
+      searchBriefs('de', cleanName, cleanSet),
+      searchBriefs('en', cleanName, cleanSet)
+    ]);
+
+    const idToLang = new Map();
+    deBriefs.forEach(b => idToLang.set(b.id, 'de'));
+    enBriefs.forEach(b => { if (!idToLang.has(b.id)) idToLang.set(b.id, 'en'); });
+
+    if (idToLang.size === 0) {
+      return res.json([]);
     }
 
+    // Auf max. 40 Karten begrenzen, um nicht zu viele Detailanfragen
+    // gleichzeitig zu feuern.
+    const entries = Array.from(idToLang.entries()).slice(0, 40);
+
+    const detailed = await Promise.all(
+      entries.map(async ([id, lang]) => {
+        try {
+          return await fetchDetail(lang, id);
+        } catch (e) {
+          return null; // einzelne kaputte Karte überspringen statt ganze Suche abbrechen
+        }
+      })
+    );
+
+    const results = detailed.filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     res.json(results);
   } catch (error) {
     const status = error.response?.status;
