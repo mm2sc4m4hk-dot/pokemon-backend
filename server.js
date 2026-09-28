@@ -1,5 +1,12 @@
 const express = require('express');
 const cors = require('cors');
+const app = express();
+
+// Erlaubt Anfragen von allen Domains (inkl. Vercel)
+app.use(cors());
+
+const express = require('express');
+const cors = require('cors');
 const axios = require('axios');
 require('dotenv').config();
 
