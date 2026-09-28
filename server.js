@@ -8,6 +8,7 @@ app.use(express.json());
 
 const translationCache = {};
 
+// Übersetzt deutsche Namen via PokeAPI ins Englische
 async function getEnglishName(inputName) {
   const clean = inputName.trim().toLowerCase();
   if (translationCache[clean]) return translationCache[clean];
@@ -26,7 +27,6 @@ async function getEnglishName(inputName) {
 app.get('/api/cards', async (req, res) => {
   try {
     const { name } = req.query;
-    // Hier ist unsere neue Überprüfung!
     if (!name) {
       return res.status(400).json({ error: 'Name ist erforderlich' });
     }
