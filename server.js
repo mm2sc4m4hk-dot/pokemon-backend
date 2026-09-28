@@ -26,6 +26,7 @@ async function getEnglishName(inputName) {
 app.get('/api/cards', async (req, res) => {
   try {
     const { name } = req.query;
+    // Hier ist unsere neue Überprüfung!
     if (!name) {
       return res.status(400).json({ error: 'Name ist erforderlich' });
     }
