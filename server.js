@@ -8,7 +8,6 @@ app.use(express.json());
 
 const translationCache = {};
 
-// Übersetzt deutsche Namen via PokeAPI ins Englische
 async function getEnglishName(inputName) {
   const clean = inputName.trim().toLowerCase();
   if (translationCache[clean]) return translationCache[clean];
@@ -42,4 +41,4 @@ app.get('/api/cards', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
+app.listen(PORT, () => console.log(`Server l�uft auf Port ${PORT}`));
