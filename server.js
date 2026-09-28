@@ -71,7 +71,23 @@ async function searchBriefs(lang, name, set) {
 
 async function fetchDetail(lang, id) {
   const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${id}`, { timeout: 10000 });
-  return normalizeCard(res.data, lang);
+  const normalized = normalizeCard(res.data, lang);
+
+  // Manche (v.a. deutsche) Karten sind zwar textlich übersetzt, aber es
+  // wurde noch kein Bild dafür eingescannt/hinterlegt -> in dem Fall auf
+  // die englische Version zurückfallen, nur um das Bild zu holen. Name,
+  // Set-Name und Preis bleiben aus der ursprünglich gewählten Sprache.
+  if (!normalized.images.small && lang !== 'en') {
+    try {
+      const enRes = await axios.get(`${TCGDEX_BASE}/en/cards/${id}`, { timeout: 10000 });
+      const enNormalized = normalizeCard(enRes.data, 'en');
+      normalized.images = enNormalized.images;
+    } catch (e) {
+      // kein Bild verfügbar -> Frontend zeigt einen Platzhalter
+    }
+  }
+
+  return normalized;
 }
 
 app.get('/api/cards', async (req, res) => {
