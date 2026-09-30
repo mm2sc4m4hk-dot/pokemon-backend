@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const cardmarket = require('./cardmarket');
 
 const app = express();
 app.use(cors());
@@ -10,6 +11,11 @@ app.use(express.json());
 // Kostenlos, kein API-Key, echte Cardmarket-Preise (EUR) direkt im
 // Card-Objekt, Karten nativ in mehreren Sprachen (u.a. Deutsch).
 const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
+
+// Zweite Datenquelle (Cardmarket-Dateien) im Hintergrund laden und täglich erneuern
+cardmarket.init();
+
+app.get('/api/cardmarket-status', (req, res) => res.json(cardmarket.meta));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
@@ -189,8 +195,10 @@ app.get('/api/cards', async (req, res) => {
       idToLang = await collectIds(parsed, cleanSet, false);
     }
 
+    // TCGdex kennt die Karte nicht -> in den Cardmarket-Dateien suchen
+    // (ohne Bild und ohne Nummernfilter, dafür mit echtem Preis).
     if (idToLang.size === 0) {
-      return res.json([]);
+      return res.json(cardmarket.search(parsed.name));
     }
 
     // Auf max. 40 Karten begrenzen, um nicht zu viele Detailanfragen
@@ -208,6 +216,7 @@ app.get('/api/cards', async (req, res) => {
     );
 
     let results = detailed.filter(Boolean);
+    if (results.length === 0) return res.json(cardmarket.search(parsed.name));
 
     // "Glumanda 044/102": zusätzlich nach der Set-Gesamtzahl filtern, wenn
     // TCGdex sie kennt (Karten ohne Angabe bleiben drin).
