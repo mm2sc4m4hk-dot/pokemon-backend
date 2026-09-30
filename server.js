@@ -212,6 +212,28 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+// Kartenliste eines Sets (für den Set-Fortschritt im Frontend)
+app.get('/api/sets/:id', async (req, res) => {
+  try {
+    const r = await axios.get(`${TCGDEX_BASE}/en/sets/${encodeURIComponent(req.params.id)}`, { timeout: 15000 });
+    const d = r.data || {};
+    res.json({
+      id: d.id,
+      name: d.name,
+      total: d.cardCount?.official ?? null,
+      cards: (d.cards || []).map(c => ({
+        id: c.id,
+        localId: c.localId,
+        name: c.name,
+        image: c.image ? `${c.image}/low.webp` : ''
+      }))
+    });
+  } catch (e) {
+    const status = e.response?.status === 404 ? 404 : 502;
+    res.status(status).json({ error: 'Set konnte nicht geladen werden.' });
+  }
+});
+
 app.get('/api/cards', async (req, res) => {
   try {
     const { name, set } = req.query;
