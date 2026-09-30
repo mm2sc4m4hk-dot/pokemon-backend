@@ -24,14 +24,15 @@ function parseQuery(raw) {
   const tokens = raw.trim().replace(/#/g, ' ').split(/\s+/).filter(Boolean);
   if (tokens.length >= 2) {
     const last = tokens[tokens.length - 1];
-    const m = last.match(/^([A-Za-z]{0,4})(\d{1,3})(?:\/([A-Za-z]{0,4}\d{1,3}))?$/);
+    const m = last.match(/^([A-Za-z]{0,4})(\d{1,3})([A-Za-z]?)(?:\/([A-Za-z]{0,4}\d{1,3}))?$/);
     if (m) {
       return {
         name: tokens.slice(0, -1).join(' '),
         number: {
           prefix: m[1].toUpperCase(),
           digits: String(parseInt(m[2], 10)), // "044" -> "44"
-          total: m[3] ? String(parseInt(m[3].replace(/\D/g, ''), 10)) : null
+          suffix: m[3].toLowerCase(),         // "195a" -> "a"
+          total: m[4] ? String(parseInt(m[4].replace(/\D/g, ''), 10)) : null
         }
       };
     }
@@ -42,15 +43,15 @@ function parseQuery(raw) {
 // localId aus TCGdex ("044", "44", "SV044", "TG05") in Prefix + Zahl ohne
 // führende Nullen zerlegen, damit "044" und "44" als gleich gelten.
 function splitLocalId(localId) {
-  const m = String(localId || '').match(/^([A-Za-z]*)(\d+)$/);
+  const m = String(localId || '').match(/^([A-Za-z]*)(\d+)([A-Za-z]?)$/);
   if (!m) return null;
-  return { prefix: m[1].toUpperCase(), digits: String(parseInt(m[2], 10)) };
+  return { prefix: m[1].toUpperCase(), digits: String(parseInt(m[2], 10)), suffix: m[3].toLowerCase() };
 }
 
 function matchesNumber(localId, number) {
   const parts = splitLocalId(localId);
   if (!parts) return false;
-  return parts.digits === number.digits && parts.prefix === number.prefix;
+  return parts.digits === number.digits && parts.prefix === number.prefix && parts.suffix === (number.suffix || '');
 }
 
 // Baut aus einem TCGdex-Kartenobjekt die Form, die das Frontend erwartet.
@@ -95,6 +96,15 @@ function normalizeCard(card, lang) {
     },
     _lang: lang
   };
+}
+
+// "Dedenne GX" -> auch "Dedenne-GX" probieren (TCGdex nutzt den Bindestrich
+// bei GX/EX/V/VMAX/VSTAR-Karten).
+function nameVariants(name) {
+  const variants = [name];
+  const hyphenated = name.replace(/\s+(GX|EX|V|VMAX|VSTAR|VUNION|ex)$/i, '-$1');
+  if (hyphenated !== name) variants.push(hyphenated);
+  return variants;
 }
 
 // Sucht Karten in einer TCGdex-Sprache und liefert die schlanke Brief-Liste
@@ -142,10 +152,13 @@ async function collectIds(parsed, set, useServerNumberFilter) {
   const perPage = parsed.number ? 100 : 48;
   const numberDigits = parsed.number && useServerNumberFilter ? parsed.number.digits : null;
 
-  const [deBriefs, enBriefs] = await Promise.all([
-    searchBriefs('de', parsed.name, set, numberDigits, perPage),
-    searchBriefs('en', parsed.name, set, numberDigits, perPage)
-  ]);
+  const variants = nameVariants(parsed.name);
+  const lists = await Promise.all(
+    ['de', 'en'].map(async (lang) =>
+      (await Promise.all(variants.map(v => searchBriefs(lang, v, set, numberDigits, perPage)))).flat()
+    )
+  );
+  const [deBriefs, enBriefs] = lists;
 
   const keep = (b) => !parsed.number || matchesNumber(b.localId, parsed.number);
 
