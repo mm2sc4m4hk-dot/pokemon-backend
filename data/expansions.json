@@ -1,232 +1,1003 @@
 {
-  "1521": "Phantom Forces",
-  "1525": "Jungle",
-  "1526": "Fossil",
-  "1527": "Base Set 2",
-  "1528": "Team Rocket",
-  "1529": "Gym Heroes",
-  "1530": "Gym Challenge",
-  "1531": "Neo Genesis",
-  "1532": "Neo Discovery",
-  "1533": "Neo Revelation",
-  "1534": "Neo Destiny",
-  "1535": "Legendary Collection",
-  "1536": "Expedition Base Set",
-  "1537": "Aquapolis",
-  "1538": "Skyridge",
-  "1539": "Ruby & Sapphire",
-  "1540": "Sandstorm",
-  "1541": "Dragon",
-  "1542": "Team Magma vs Team Aqua",
-  "1543": "Hidden Legends",
-  "1544": "FireRed & LeafGreen",
-  "1545": "Team Rocket Returns",
-  "1546": "Deoxys",
-  "1547": "Emerald",
-  "1548": "Unseen Forces",
-  "1550": "Legend Maker",
-  "1552": "Crystal Guardians",
-  "1554": "Power Keepers (Variante 2, unsicher)",
-  "1566": "HeartGold SoulSilver",
-  "1567": "Unleashed",
-  "1568": "Undaunted",
-  "1569": "Triumphant",
-  "1570": "Call of Legends",
-  "1571": "Black & White",
-  "1572": "Emerging Powers",
-  "1573": "Noble Victories",
-  "1574": "Next Destinies",
-  "1575": "Dark Explorers",
-  "1576": "Dragons Exalted",
-  "1577": "Boundaries Crossed",
-  "1578": "Plasma Storm",
-  "1579": "Plasma Freeze",
-  "1580": "Plasma Blast",
-  "1581": "Legendary Treasures",
-  "1582": "XY",
-  "1583": "Flashfire",
-  "1584": "Furious Fists (Variante 2, unsicher)",
-  "1585": "Primal Clash",
-  "1607": "Wizards Black Star Promos",
-  "1608": "Nintendo Black Star Promos",
-  "1610": "HGSS Black Star Promos",
-  "1611": "BW Black Star Promos",
-  "1612": "XY Black Star Promos",
-  "1613": "POP Series 1",
-  "1614": "POP Series 2",
-  "1615": "POP Series 3",
-  "1616": "POP Series 4",
-  "1623": "McDonald's Collection 2011",
-  "1624": "McDonald's Collection 2012",
-  "1625": "McDonald's Collection 2014",
-  "1626": "EX trainer Kit (Latias)",
-  "1627": "EX trainer Kit 2 (Plusle)",
-  "1629": "HS trainer Kit (Raichu)",
-  "1633": "Southern Islands",
-  "1636": "Dragon Vault (Variante 2, unsicher)",
-  "1637": "Kalos Starter Set",
-  "1648": "Double Crisis",
-  "1649": "Roaring Skies",
-  "1660": "Ancient Origins (Variante 2, unsicher)",
-  "1678": "BREAKthrough",
-  "1687": "BREAKpoint",
-  "1693": "Generations",
-  "1706": "Fates Collide",
-  "1716": "Steam Siege",
-  "1741": "McDonald's Collection 2015",
-  "1742": "Evolutions",
-  "1745": "Sun & Moon",
-  "1752": "McDonald's Collection 2016",
-  "1757": "SM Black Star Promos",
-  "1800": "Guardians Rising",
-  "1824": "Burning Shadows",
-  "1842": "Shining Legends (Variante 2, unsicher)",
-  "1843": "Crimson Invasion",
-  "1845": "McDonald's Collection 2017",
-  "2065": "Ultra Prism",
-  "2075": "Forbidden Light",
-  "2320": "Celestial Storm",
-  "2351": "Dragon Majesty",
-  "2370": "Lost Thunder",
-  "2404": "McDonald's Collection 2018",
-  "2407": "Team Up",
-  "2437": "Unbroken Bonds",
-  "2438": "Detective Pikachu (Variante 2, unsicher)",
-  "2487": "Unified Minds",
-  "2514": "Hidden Fates Shiny Vault",
-  "2644": "Cosmic Eclipse",
-  "2829": "McDonald's Collection 2019",
-  "2916": "SWSH Black Star Promos",
-  "2921": "Sword & Shield",
-  "3143": "Rebel Clash",
-  "3199": "Darkness Ablaze",
-  "3279": "Rebel Clash (Variante 2, unsicher)",
-  "3419": "Champion's Path",
-  "3479": "Vivid Voltage (Variante 2, unsicher)",
-  "3484": "Vivid Voltage",
-  "3510": "Pokémon Futsal 2020",
-  "3630": "Shining Fates Shiny Vault",
-  "3675": "Battle Styles",
-  "3738": "McDonald's Collection 2021 (Variante 2, unsicher)",
-  "3826": "Detective Pikachu",
-  "3881": "Celestial Storm (Variante 2, unsicher)",
-  "3891": "Dragon Majesty (Variante 2, unsicher)",
-  "3896": "Forbidden Light (Variante 2, unsicher)",
-  "3931": "Shining Legends",
-  "3989": "Evolutions (Variante 2, unsicher)",
-  "4004": "Fates Collide (Variante 2, unsicher)",
-  "4009": "BREAKpoint (Variante 2, unsicher)",
-  "4024": "Ancient Origins",
-  "4029": "Roaring Skies (Variante 2, unsicher)",
-  "4044": "Phantom Forces (Variante 2, unsicher)",
-  "4049": "Furious Fists",
-  "4054": "Flashfire (Variante 2, unsicher)",
-  "4089": "Generations (Variante 2, unsicher)",
-  "4124": "Double Crisis (Variante 2, unsicher)",
-  "4154": "Kalos Starter Set (Variante 2, unsicher)",
-  "4169": "Base Set",
-  "4174": "Chilling Reign",
-  "4180": "Legendary Treasures (Variante 2, unsicher)",
-  "4182": "Plasma Blast (Variante 2, unsicher)",
-  "4193": "Plasma Storm (Variante 2, unsicher)",
-  "4203": "Dragon Vault",
-  "4204": "Dark Explorers (Variante 2, unsicher)",
-  "4210": "Noble Victories (Variante 2, unsicher)",
-  "4217": "McDonald's Collection 2011 (Variante 2, unsicher)",
-  "4261": "Triumphant (Variante 2, unsicher)",
-  "4265": "Undaunted (Variante 2, unsicher)",
-  "4273": "HeartGold SoulSilver (Variante 2, unsicher)",
-  "4314": "Power Keepers",
-  "4328": "Evolving Skies",
-  "4345": "Celebrations (Variante 2, unsicher)",
-  "4346": "Celebrations Classic Collection",
-  "4357": "Southern Islands (Variante 2, unsicher)",
-  "4382": "Fusion Strike",
-  "4434": "Brilliant Stars",
-  "4440": "Brilliant Stars (Variante 2, unsicher)",
-  "4463": "Jungle (Variante 2, unsicher)",
-  "4464": "Fossil (Variante 2, unsicher)",
-  "4465": "Team Rocket (Variante 2, unsicher)",
-  "4467": "Gym Challenge (Variante 2, unsicher)",
-  "4505": "Poké Card Creator Pack",
-  "4506": "Neo Genesis (Variante 2, unsicher)",
-  "4507": "Neo Discovery (Variante 2, unsicher)",
-  "4508": "Neo Revelation (Variante 2, unsicher)",
-  "4509": "Neo Destiny (Variante 2, unsicher)",
-  "4786": "Pokémon GO",
-  "4979": "Astral Radiance",
-  "5021": "Expedition Base Set (Variante 2, unsicher)",
-  "5051": "Pokémon GO (Variante 2, unsicher)",
-  "5093": "Lost Origin",
-  "5135": "McDonald's Collection 2022",
-  "5142": "Silver Tempest",
-  "5201": "Crown Zenith",
-  "5223": "Scarlet & Violet",
-  "5241": "SVP Black Star Promos",
-  "5318": "Paldea Evolved",
-  "5328": "151",
-  "5385": "Obsidian Flames",
-  "5402": "151 (Variante 2, unsicher)",
-  "5409": "Obsidian Flames (Variante 2, unsicher)",
-  "5430": "McDonald's Collection 2023",
-  "5444": "Paradox Rift",
-  "5519": "Paldean Fates (Variante 2, unsicher)",
-  "5526": "My First Battle",
-  "5546": "Paldean Fates",
-  "5589": "Temporal Forces",
-  "5690": "Twilight Masquerade (Variante 2, unsicher)",
-  "5691": "Twilight Masquerade",
-  "5700": "Crystal Guardians (Variante 2, unsicher)",
-  "5710": "Legend Maker (Variante 2, unsicher)",
-  "5711": "Unseen Forces (Variante 2, unsicher)",
-  "5712": "Team Rocket Returns (Variante 2, unsicher)",
-  "5713": "Deoxys (Variante 2, unsicher)",
-  "5714": "FireRed & LeafGreen (Variante 2, unsicher)",
-  "5757": "Shrouded Fable",
-  "5760": "Shrouded Fable (Variante 2, unsicher)",
-  "5782": "Stellar Crown (Variante 2, unsicher)",
-  "5802": "Stellar Crown",
-  "5864": "Hidden Legends (Variante 2, unsicher)",
-  "5872": "Dragon (Variante 2, unsicher)",
-  "5873": "Sandstorm (Variante 2, unsicher)",
-  "5877": "Ruby & Sapphire (Variante 2, unsicher)",
-  "5879": "Surging Sparks",
-  "5901": "Surging Sparks (Variante 2, unsicher)",
-  "5944": "Prismatic Evolutions",
-  "5978": "McDonald's Collection 2024",
-  "5996": "Journey Together (Variante 2, unsicher)",
-  "6006": "Journey Together",
-  "6092": "Destined Rivals (Variante 3, unsicher)",
-  "6096": "Destined Rivals",
-  "6099": "151 (Variante 3, unsicher)",
-  "6130": "Black Bolt (Variante 2, unsicher)",
-  "6131": "White Flare (Variante 2, unsicher)",
-  "6134": "Black Bolt",
-  "6135": "White Flare",
-  "6197": "Black Bolt (Variante 3, unsicher)",
-  "6198": "White Flare (Variante 3, unsicher)",
-  "6209": "Mega Evolution",
-  "6219": "151 (Variante 4, unsicher)",
-  "6222": "Black Bolt (Variante 4, unsicher)",
-  "6223": "White Flare (Variante 4, unsicher)",
-  "6232": "MEP Black Star Promos",
-  "6291": "Phantasmal Flames (Variante 2, unsicher)",
-  "6299": "Phantasmal Flames",
-  "6348": "Celebrations",
-  "6380": "Ascended Heroes (Variante 2, unsicher)",
-  "6395": "Ascended Heroes",
-  "6416": "Temporal Forces (Variante 2, unsicher)",
-  "6427": "Perfect Order (Variante 2, unsicher)",
-  "6443": "Perfect Order",
-  "6494": "Chaos Rising (Variante 2, unsicher)",
-  "6514": "McDonald's Collection 2021",
-  "6517": "Chaos Rising",
-  "6556": "Pitch Black (Variante 2, unsicher)",
-  "6569": "Pitch Black",
-  "6595": "Prismatic Evolutions (Variante 2, unsicher)",
-  "6601": "30th Celebration",
-  "6602": "30th Celebration (Variante 3, unsicher)",
-  "6603": "30th Celebration (Variante 4, unsicher)",
-  "6604": "30th Celebration (Variante 2, unsicher)",
-  "6633": "Destined Rivals (Variante 2, unsicher)"
+  "1521": {
+    "name": "Phantom Forces",
+    "tcgdexId": "xy4"
+  },
+  "1525": {
+    "name": "Jungle",
+    "tcgdexId": "base2"
+  },
+  "1526": {
+    "name": "Fossil",
+    "tcgdexId": "base3"
+  },
+  "1527": {
+    "name": "Base Set 2",
+    "tcgdexId": "base4"
+  },
+  "1528": {
+    "name": "Team Rocket",
+    "tcgdexId": "base5"
+  },
+  "1529": {
+    "name": "Gym Heroes",
+    "tcgdexId": "gym1"
+  },
+  "1530": {
+    "name": "Gym Challenge",
+    "tcgdexId": "gym2"
+  },
+  "1531": {
+    "name": "Neo Genesis",
+    "tcgdexId": "neo1"
+  },
+  "1532": {
+    "name": "Neo Discovery",
+    "tcgdexId": "neo2"
+  },
+  "1533": {
+    "name": "Neo Revelation",
+    "tcgdexId": "neo3"
+  },
+  "1534": {
+    "name": "Neo Destiny",
+    "tcgdexId": "neo4"
+  },
+  "1535": {
+    "name": "Legendary Collection",
+    "tcgdexId": "lc"
+  },
+  "1536": {
+    "name": "Expedition Base Set",
+    "tcgdexId": "ecard1"
+  },
+  "1537": {
+    "name": "Aquapolis",
+    "tcgdexId": "ecard2"
+  },
+  "1538": {
+    "name": "Skyridge",
+    "tcgdexId": "ecard3"
+  },
+  "1539": {
+    "name": "Ruby & Sapphire",
+    "tcgdexId": "ex1"
+  },
+  "1540": {
+    "name": "Sandstorm",
+    "tcgdexId": "ex2"
+  },
+  "1541": {
+    "name": "Dragon",
+    "tcgdexId": "ex3"
+  },
+  "1542": {
+    "name": "Team Magma vs Team Aqua",
+    "tcgdexId": "ex4"
+  },
+  "1543": {
+    "name": "Hidden Legends",
+    "tcgdexId": "ex5"
+  },
+  "1544": {
+    "name": "FireRed & LeafGreen",
+    "tcgdexId": "ex6"
+  },
+  "1545": {
+    "name": "Team Rocket Returns",
+    "tcgdexId": "ex7"
+  },
+  "1546": {
+    "name": "Deoxys",
+    "tcgdexId": "ex8"
+  },
+  "1547": {
+    "name": "Emerald",
+    "tcgdexId": "ex9"
+  },
+  "1548": {
+    "name": "Unseen Forces",
+    "tcgdexId": "ex10"
+  },
+  "1550": {
+    "name": "Legend Maker",
+    "tcgdexId": "ex12"
+  },
+  "1552": {
+    "name": "Crystal Guardians",
+    "tcgdexId": "ex14"
+  },
+  "1554": {
+    "name": "Power Keepers (Variante 2, unsicher)",
+    "tcgdexId": "ex16",
+    "uncertain": true
+  },
+  "1566": {
+    "name": "HeartGold SoulSilver",
+    "tcgdexId": "hgss1"
+  },
+  "1567": {
+    "name": "Unleashed",
+    "tcgdexId": "hgss2"
+  },
+  "1568": {
+    "name": "Undaunted",
+    "tcgdexId": "hgss3"
+  },
+  "1569": {
+    "name": "Triumphant",
+    "tcgdexId": "hgss4"
+  },
+  "1570": {
+    "name": "Call of Legends",
+    "tcgdexId": "col1"
+  },
+  "1571": {
+    "name": "Black & White",
+    "tcgdexId": "bw1"
+  },
+  "1572": {
+    "name": "Emerging Powers",
+    "tcgdexId": "bw2"
+  },
+  "1573": {
+    "name": "Noble Victories",
+    "tcgdexId": "bw3"
+  },
+  "1574": {
+    "name": "Next Destinies",
+    "tcgdexId": "bw4"
+  },
+  "1575": {
+    "name": "Dark Explorers",
+    "tcgdexId": "bw5"
+  },
+  "1576": {
+    "name": "Dragons Exalted",
+    "tcgdexId": "bw6"
+  },
+  "1577": {
+    "name": "Boundaries Crossed",
+    "tcgdexId": "bw7"
+  },
+  "1578": {
+    "name": "Plasma Storm",
+    "tcgdexId": "bw8"
+  },
+  "1579": {
+    "name": "Plasma Freeze",
+    "tcgdexId": "bw9"
+  },
+  "1580": {
+    "name": "Plasma Blast",
+    "tcgdexId": "bw10"
+  },
+  "1581": {
+    "name": "Legendary Treasures",
+    "tcgdexId": "bw11"
+  },
+  "1582": {
+    "name": "XY",
+    "tcgdexId": "xy1"
+  },
+  "1583": {
+    "name": "Flashfire",
+    "tcgdexId": "xy2"
+  },
+  "1584": {
+    "name": "Furious Fists (Variante 2, unsicher)",
+    "tcgdexId": "xy3",
+    "uncertain": true
+  },
+  "1585": {
+    "name": "Primal Clash",
+    "tcgdexId": "xy5"
+  },
+  "1607": {
+    "name": "Wizards Black Star Promos",
+    "tcgdexId": "basep"
+  },
+  "1608": {
+    "name": "Nintendo Black Star Promos",
+    "tcgdexId": "np"
+  },
+  "1610": {
+    "name": "HGSS Black Star Promos",
+    "tcgdexId": "hgssp"
+  },
+  "1611": {
+    "name": "BW Black Star Promos",
+    "tcgdexId": "bwp"
+  },
+  "1612": {
+    "name": "XY Black Star Promos",
+    "tcgdexId": "xyp"
+  },
+  "1613": {
+    "name": "POP Series 1",
+    "tcgdexId": "pop1"
+  },
+  "1614": {
+    "name": "POP Series 2",
+    "tcgdexId": "pop2"
+  },
+  "1615": {
+    "name": "POP Series 3",
+    "tcgdexId": "pop3"
+  },
+  "1616": {
+    "name": "POP Series 4",
+    "tcgdexId": "pop4"
+  },
+  "1623": {
+    "name": "McDonald's Collection 2011",
+    "tcgdexId": "2011bw"
+  },
+  "1624": {
+    "name": "McDonald's Collection 2012",
+    "tcgdexId": "2012bw"
+  },
+  "1625": {
+    "name": "McDonald's Collection 2014",
+    "tcgdexId": "2014xy"
+  },
+  "1626": {
+    "name": "EX trainer Kit (Latias)",
+    "tcgdexId": "tk-ex-latia"
+  },
+  "1627": {
+    "name": "EX trainer Kit 2 (Plusle)",
+    "tcgdexId": "tk-ex-p"
+  },
+  "1629": {
+    "name": "HS trainer Kit (Raichu)",
+    "tcgdexId": "tk-hs-r"
+  },
+  "1633": {
+    "name": "Southern Islands",
+    "tcgdexId": "si1"
+  },
+  "1636": {
+    "name": "Dragon Vault (Variante 2, unsicher)",
+    "tcgdexId": "dv1",
+    "uncertain": true
+  },
+  "1637": {
+    "name": "Kalos Starter Set",
+    "tcgdexId": "xy0"
+  },
+  "1648": {
+    "name": "Double Crisis",
+    "tcgdexId": "dc1"
+  },
+  "1649": {
+    "name": "Roaring Skies",
+    "tcgdexId": "xy6"
+  },
+  "1660": {
+    "name": "Ancient Origins (Variante 2, unsicher)",
+    "tcgdexId": "xy7",
+    "uncertain": true
+  },
+  "1678": {
+    "name": "BREAKthrough",
+    "tcgdexId": "xy8"
+  },
+  "1687": {
+    "name": "BREAKpoint",
+    "tcgdexId": "xy9"
+  },
+  "1693": {
+    "name": "Generations",
+    "tcgdexId": "g1"
+  },
+  "1706": {
+    "name": "Fates Collide",
+    "tcgdexId": "xy10"
+  },
+  "1716": {
+    "name": "Steam Siege",
+    "tcgdexId": "xy11"
+  },
+  "1741": {
+    "name": "McDonald's Collection 2015",
+    "tcgdexId": "2015xy"
+  },
+  "1742": {
+    "name": "Evolutions",
+    "tcgdexId": "xy12"
+  },
+  "1745": {
+    "name": "Sun & Moon",
+    "tcgdexId": "sm1"
+  },
+  "1752": {
+    "name": "McDonald's Collection 2016",
+    "tcgdexId": "2016xy"
+  },
+  "1757": {
+    "name": "SM Black Star Promos",
+    "tcgdexId": "smp"
+  },
+  "1800": {
+    "name": "Guardians Rising",
+    "tcgdexId": "sm2"
+  },
+  "1824": {
+    "name": "Burning Shadows",
+    "tcgdexId": "sm3"
+  },
+  "1842": {
+    "name": "Shining Legends (Variante 2, unsicher)",
+    "tcgdexId": "sm3.5",
+    "uncertain": true
+  },
+  "1843": {
+    "name": "Crimson Invasion",
+    "tcgdexId": "sm4"
+  },
+  "1845": {
+    "name": "McDonald's Collection 2017",
+    "tcgdexId": "2017sm"
+  },
+  "2065": {
+    "name": "Ultra Prism",
+    "tcgdexId": "sm5"
+  },
+  "2075": {
+    "name": "Forbidden Light",
+    "tcgdexId": "sm6"
+  },
+  "2320": {
+    "name": "Celestial Storm",
+    "tcgdexId": "sm7"
+  },
+  "2351": {
+    "name": "Dragon Majesty",
+    "tcgdexId": "sm7.5"
+  },
+  "2370": {
+    "name": "Lost Thunder",
+    "tcgdexId": "sm8"
+  },
+  "2404": {
+    "name": "McDonald's Collection 2018",
+    "tcgdexId": "2018sm"
+  },
+  "2407": {
+    "name": "Team Up",
+    "tcgdexId": "sm9"
+  },
+  "2437": {
+    "name": "Unbroken Bonds",
+    "tcgdexId": "sm10"
+  },
+  "2438": {
+    "name": "Detective Pikachu (Variante 2, unsicher)",
+    "tcgdexId": "det1",
+    "uncertain": true
+  },
+  "2487": {
+    "name": "Unified Minds",
+    "tcgdexId": "sm11"
+  },
+  "2514": {
+    "name": "Hidden Fates Shiny Vault",
+    "tcgdexId": "sma"
+  },
+  "2644": {
+    "name": "Cosmic Eclipse",
+    "tcgdexId": "sm12"
+  },
+  "2829": {
+    "name": "McDonald's Collection 2019",
+    "tcgdexId": "2019sm"
+  },
+  "2916": {
+    "name": "SWSH Black Star Promos",
+    "tcgdexId": "swshp"
+  },
+  "2921": {
+    "name": "Sword & Shield",
+    "tcgdexId": "swsh1"
+  },
+  "3143": {
+    "name": "Rebel Clash",
+    "tcgdexId": "swsh2"
+  },
+  "3199": {
+    "name": "Darkness Ablaze",
+    "tcgdexId": "swsh3"
+  },
+  "3279": {
+    "name": "Rebel Clash (Variante 2, unsicher)",
+    "tcgdexId": "swsh2",
+    "uncertain": true
+  },
+  "3419": {
+    "name": "Champion's Path",
+    "tcgdexId": "swsh3.5"
+  },
+  "3479": {
+    "name": "Vivid Voltage (Variante 2, unsicher)",
+    "tcgdexId": "swsh4",
+    "uncertain": true
+  },
+  "3484": {
+    "name": "Vivid Voltage",
+    "tcgdexId": "swsh4"
+  },
+  "3510": {
+    "name": "Pokémon Futsal 2020",
+    "tcgdexId": "fut2020"
+  },
+  "3630": {
+    "name": "Shining Fates Shiny Vault",
+    "tcgdexId": "swsh4.5sv"
+  },
+  "3675": {
+    "name": "Battle Styles",
+    "tcgdexId": "swsh5"
+  },
+  "3738": {
+    "name": "McDonald's Collection 2021 (Variante 2, unsicher)",
+    "tcgdexId": "2021swsh",
+    "uncertain": true
+  },
+  "3826": {
+    "name": "Detective Pikachu",
+    "tcgdexId": "det1"
+  },
+  "3881": {
+    "name": "Celestial Storm (Variante 2, unsicher)",
+    "tcgdexId": "sm7",
+    "uncertain": true
+  },
+  "3891": {
+    "name": "Dragon Majesty (Variante 2, unsicher)",
+    "tcgdexId": "sm7.5",
+    "uncertain": true
+  },
+  "3896": {
+    "name": "Forbidden Light (Variante 2, unsicher)",
+    "tcgdexId": "sm6",
+    "uncertain": true
+  },
+  "3931": {
+    "name": "Shining Legends",
+    "tcgdexId": "sm3.5"
+  },
+  "3989": {
+    "name": "Evolutions (Variante 2, unsicher)",
+    "tcgdexId": "xy12",
+    "uncertain": true
+  },
+  "4004": {
+    "name": "Fates Collide (Variante 2, unsicher)",
+    "tcgdexId": "xy10",
+    "uncertain": true
+  },
+  "4009": {
+    "name": "BREAKpoint (Variante 2, unsicher)",
+    "tcgdexId": "xy9",
+    "uncertain": true
+  },
+  "4024": {
+    "name": "Ancient Origins",
+    "tcgdexId": "xy7"
+  },
+  "4029": {
+    "name": "Roaring Skies (Variante 2, unsicher)",
+    "tcgdexId": "xy6",
+    "uncertain": true
+  },
+  "4044": {
+    "name": "Phantom Forces (Variante 2, unsicher)",
+    "tcgdexId": "xy4",
+    "uncertain": true
+  },
+  "4049": {
+    "name": "Furious Fists",
+    "tcgdexId": "xy3"
+  },
+  "4054": {
+    "name": "Flashfire (Variante 2, unsicher)",
+    "tcgdexId": "xy2",
+    "uncertain": true
+  },
+  "4089": {
+    "name": "Generations (Variante 2, unsicher)",
+    "tcgdexId": "g1",
+    "uncertain": true
+  },
+  "4124": {
+    "name": "Double Crisis (Variante 2, unsicher)",
+    "tcgdexId": "dc1",
+    "uncertain": true
+  },
+  "4154": {
+    "name": "Kalos Starter Set (Variante 2, unsicher)",
+    "tcgdexId": "xy0",
+    "uncertain": true
+  },
+  "4169": {
+    "name": "Base Set",
+    "tcgdexId": "base1"
+  },
+  "4174": {
+    "name": "Chilling Reign",
+    "tcgdexId": "swsh6"
+  },
+  "4180": {
+    "name": "Legendary Treasures (Variante 2, unsicher)",
+    "tcgdexId": "bw11",
+    "uncertain": true
+  },
+  "4182": {
+    "name": "Plasma Blast (Variante 2, unsicher)",
+    "tcgdexId": "bw10",
+    "uncertain": true
+  },
+  "4193": {
+    "name": "Plasma Storm (Variante 2, unsicher)",
+    "tcgdexId": "bw8",
+    "uncertain": true
+  },
+  "4203": {
+    "name": "Dragon Vault",
+    "tcgdexId": "dv1"
+  },
+  "4204": {
+    "name": "Dark Explorers (Variante 2, unsicher)",
+    "tcgdexId": "bw5",
+    "uncertain": true
+  },
+  "4210": {
+    "name": "Noble Victories (Variante 2, unsicher)",
+    "tcgdexId": "bw3",
+    "uncertain": true
+  },
+  "4217": {
+    "name": "McDonald's Collection 2011 (Variante 2, unsicher)",
+    "tcgdexId": "2011bw",
+    "uncertain": true
+  },
+  "4261": {
+    "name": "Triumphant (Variante 2, unsicher)",
+    "tcgdexId": "hgss4",
+    "uncertain": true
+  },
+  "4265": {
+    "name": "Undaunted (Variante 2, unsicher)",
+    "tcgdexId": "hgss3",
+    "uncertain": true
+  },
+  "4273": {
+    "name": "HeartGold SoulSilver (Variante 2, unsicher)",
+    "tcgdexId": "hgss1",
+    "uncertain": true
+  },
+  "4314": {
+    "name": "Power Keepers",
+    "tcgdexId": "ex16"
+  },
+  "4328": {
+    "name": "Evolving Skies",
+    "tcgdexId": "swsh7"
+  },
+  "4345": {
+    "name": "Celebrations (Variante 2, unsicher)",
+    "tcgdexId": "cel25",
+    "uncertain": true
+  },
+  "4346": {
+    "name": "Celebrations Classic Collection",
+    "tcgdexId": "cel25cc"
+  },
+  "4357": {
+    "name": "Southern Islands (Variante 2, unsicher)",
+    "tcgdexId": "si1",
+    "uncertain": true
+  },
+  "4382": {
+    "name": "Fusion Strike",
+    "tcgdexId": "swsh8"
+  },
+  "4434": {
+    "name": "Brilliant Stars",
+    "tcgdexId": "swsh9"
+  },
+  "4440": {
+    "name": "Brilliant Stars (Variante 2, unsicher)",
+    "tcgdexId": "swsh9",
+    "uncertain": true
+  },
+  "4463": {
+    "name": "Jungle (Variante 2, unsicher)",
+    "tcgdexId": "base2",
+    "uncertain": true
+  },
+  "4464": {
+    "name": "Fossil (Variante 2, unsicher)",
+    "tcgdexId": "base3",
+    "uncertain": true
+  },
+  "4465": {
+    "name": "Team Rocket (Variante 2, unsicher)",
+    "tcgdexId": "base5",
+    "uncertain": true
+  },
+  "4467": {
+    "name": "Gym Challenge (Variante 2, unsicher)",
+    "tcgdexId": "gym2",
+    "uncertain": true
+  },
+  "4505": {
+    "name": "Poké Card Creator Pack",
+    "tcgdexId": "ex5.5"
+  },
+  "4506": {
+    "name": "Neo Genesis (Variante 2, unsicher)",
+    "tcgdexId": "neo1",
+    "uncertain": true
+  },
+  "4507": {
+    "name": "Neo Discovery (Variante 2, unsicher)",
+    "tcgdexId": "neo2",
+    "uncertain": true
+  },
+  "4508": {
+    "name": "Neo Revelation (Variante 2, unsicher)",
+    "tcgdexId": "neo3",
+    "uncertain": true
+  },
+  "4509": {
+    "name": "Neo Destiny (Variante 2, unsicher)",
+    "tcgdexId": "neo4",
+    "uncertain": true
+  },
+  "4786": {
+    "name": "Pokémon GO",
+    "tcgdexId": "swsh10.5"
+  },
+  "4979": {
+    "name": "Astral Radiance",
+    "tcgdexId": "swsh10"
+  },
+  "5021": {
+    "name": "Expedition Base Set (Variante 2, unsicher)",
+    "tcgdexId": "ecard1",
+    "uncertain": true
+  },
+  "5051": {
+    "name": "Pokémon GO (Variante 2, unsicher)",
+    "tcgdexId": "swsh10.5",
+    "uncertain": true
+  },
+  "5093": {
+    "name": "Lost Origin",
+    "tcgdexId": "swsh11"
+  },
+  "5135": {
+    "name": "McDonald's Collection 2022",
+    "tcgdexId": "2022swsh"
+  },
+  "5142": {
+    "name": "Silver Tempest",
+    "tcgdexId": "swsh12"
+  },
+  "5201": {
+    "name": "Crown Zenith",
+    "tcgdexId": "swsh12.5"
+  },
+  "5223": {
+    "name": "Scarlet & Violet",
+    "tcgdexId": "sv01"
+  },
+  "5241": {
+    "name": "SVP Black Star Promos",
+    "tcgdexId": "svp"
+  },
+  "5318": {
+    "name": "Paldea Evolved",
+    "tcgdexId": "sv02"
+  },
+  "5328": {
+    "name": "151",
+    "tcgdexId": "sv03.5"
+  },
+  "5385": {
+    "name": "Obsidian Flames",
+    "tcgdexId": "sv03"
+  },
+  "5402": {
+    "name": "151 (Variante 2, unsicher)",
+    "tcgdexId": "sv03.5",
+    "uncertain": true
+  },
+  "5409": {
+    "name": "Obsidian Flames (Variante 2, unsicher)",
+    "tcgdexId": "sv03",
+    "uncertain": true
+  },
+  "5430": {
+    "name": "McDonald's Collection 2023",
+    "tcgdexId": "2023sv"
+  },
+  "5444": {
+    "name": "Paradox Rift",
+    "tcgdexId": "sv04"
+  },
+  "5519": {
+    "name": "Paldean Fates (Variante 2, unsicher)",
+    "tcgdexId": "sv04.5",
+    "uncertain": true
+  },
+  "5526": {
+    "name": "My First Battle",
+    "tcgdexId": "mfb"
+  },
+  "5546": {
+    "name": "Paldean Fates",
+    "tcgdexId": "sv04.5"
+  },
+  "5589": {
+    "name": "Temporal Forces",
+    "tcgdexId": "sv05"
+  },
+  "5690": {
+    "name": "Twilight Masquerade (Variante 2, unsicher)",
+    "tcgdexId": "sv06",
+    "uncertain": true
+  },
+  "5691": {
+    "name": "Twilight Masquerade",
+    "tcgdexId": "sv06"
+  },
+  "5700": {
+    "name": "Crystal Guardians (Variante 2, unsicher)",
+    "tcgdexId": "ex14",
+    "uncertain": true
+  },
+  "5710": {
+    "name": "Legend Maker (Variante 2, unsicher)",
+    "tcgdexId": "ex12",
+    "uncertain": true
+  },
+  "5711": {
+    "name": "Unseen Forces (Variante 2, unsicher)",
+    "tcgdexId": "ex10",
+    "uncertain": true
+  },
+  "5712": {
+    "name": "Team Rocket Returns (Variante 2, unsicher)",
+    "tcgdexId": "ex7",
+    "uncertain": true
+  },
+  "5713": {
+    "name": "Deoxys (Variante 2, unsicher)",
+    "tcgdexId": "ex8",
+    "uncertain": true
+  },
+  "5714": {
+    "name": "FireRed & LeafGreen (Variante 2, unsicher)",
+    "tcgdexId": "ex6",
+    "uncertain": true
+  },
+  "5757": {
+    "name": "Shrouded Fable",
+    "tcgdexId": "sv06.5"
+  },
+  "5760": {
+    "name": "Shrouded Fable (Variante 2, unsicher)",
+    "tcgdexId": "sv06.5",
+    "uncertain": true
+  },
+  "5782": {
+    "name": "Stellar Crown (Variante 2, unsicher)",
+    "tcgdexId": "sv07",
+    "uncertain": true
+  },
+  "5802": {
+    "name": "Stellar Crown",
+    "tcgdexId": "sv07"
+  },
+  "5864": {
+    "name": "Hidden Legends (Variante 2, unsicher)",
+    "tcgdexId": "ex5",
+    "uncertain": true
+  },
+  "5872": {
+    "name": "Dragon (Variante 2, unsicher)",
+    "tcgdexId": "ex3",
+    "uncertain": true
+  },
+  "5873": {
+    "name": "Sandstorm (Variante 2, unsicher)",
+    "tcgdexId": "ex2",
+    "uncertain": true
+  },
+  "5877": {
+    "name": "Ruby & Sapphire (Variante 2, unsicher)",
+    "tcgdexId": "ex1",
+    "uncertain": true
+  },
+  "5879": {
+    "name": "Surging Sparks",
+    "tcgdexId": "sv08"
+  },
+  "5901": {
+    "name": "Surging Sparks (Variante 2, unsicher)",
+    "tcgdexId": "sv08",
+    "uncertain": true
+  },
+  "5944": {
+    "name": "Prismatic Evolutions",
+    "tcgdexId": "sv08.5"
+  },
+  "5978": {
+    "name": "McDonald's Collection 2024",
+    "tcgdexId": "2024sv"
+  },
+  "5996": {
+    "name": "Journey Together (Variante 2, unsicher)",
+    "tcgdexId": "sv09",
+    "uncertain": true
+  },
+  "6006": {
+    "name": "Journey Together",
+    "tcgdexId": "sv09"
+  },
+  "6092": {
+    "name": "Destined Rivals (Variante 3, unsicher)",
+    "tcgdexId": "sv10",
+    "uncertain": true
+  },
+  "6096": {
+    "name": "Destined Rivals",
+    "tcgdexId": "sv10"
+  },
+  "6099": {
+    "name": "151 (Variante 3, unsicher)",
+    "tcgdexId": "sv03.5",
+    "uncertain": true
+  },
+  "6130": {
+    "name": "Black Bolt (Variante 2, unsicher)",
+    "tcgdexId": "sv10.5b",
+    "uncertain": true
+  },
+  "6131": {
+    "name": "White Flare (Variante 2, unsicher)",
+    "tcgdexId": "sv10.5w",
+    "uncertain": true
+  },
+  "6134": {
+    "name": "Black Bolt",
+    "tcgdexId": "sv10.5b"
+  },
+  "6135": {
+    "name": "White Flare",
+    "tcgdexId": "sv10.5w"
+  },
+  "6197": {
+    "name": "Black Bolt (Variante 3, unsicher)",
+    "tcgdexId": "sv10.5b",
+    "uncertain": true
+  },
+  "6198": {
+    "name": "White Flare (Variante 3, unsicher)",
+    "tcgdexId": "sv10.5w",
+    "uncertain": true
+  },
+  "6209": {
+    "name": "Mega Evolution",
+    "tcgdexId": "me01"
+  },
+  "6219": {
+    "name": "151 (Variante 4, unsicher)",
+    "tcgdexId": "sv03.5",
+    "uncertain": true
+  },
+  "6222": {
+    "name": "Black Bolt (Variante 4, unsicher)",
+    "tcgdexId": "sv10.5b",
+    "uncertain": true
+  },
+  "6223": {
+    "name": "White Flare (Variante 4, unsicher)",
+    "tcgdexId": "sv10.5w",
+    "uncertain": true
+  },
+  "6232": {
+    "name": "MEP Black Star Promos",
+    "tcgdexId": "mep"
+  },
+  "6291": {
+    "name": "Phantasmal Flames (Variante 2, unsicher)",
+    "tcgdexId": "me02",
+    "uncertain": true
+  },
+  "6299": {
+    "name": "Phantasmal Flames",
+    "tcgdexId": "me02"
+  },
+  "6348": {
+    "name": "Celebrations",
+    "tcgdexId": "cel25"
+  },
+  "6380": {
+    "name": "Ascended Heroes (Variante 2, unsicher)",
+    "tcgdexId": "me02.5",
+    "uncertain": true
+  },
+  "6395": {
+    "name": "Ascended Heroes",
+    "tcgdexId": "me02.5"
+  },
+  "6416": {
+    "name": "Temporal Forces (Variante 2, unsicher)",
+    "tcgdexId": "sv05",
+    "uncertain": true
+  },
+  "6427": {
+    "name": "Perfect Order (Variante 2, unsicher)",
+    "tcgdexId": "me03",
+    "uncertain": true
+  },
+  "6443": {
+    "name": "Perfect Order",
+    "tcgdexId": "me03"
+  },
+  "6494": {
+    "name": "Chaos Rising (Variante 2, unsicher)",
+    "tcgdexId": "me04",
+    "uncertain": true
+  },
+  "6514": {
+    "name": "McDonald's Collection 2021",
+    "tcgdexId": "2021swsh"
+  },
+  "6517": {
+    "name": "Chaos Rising",
+    "tcgdexId": "me04"
+  },
+  "6556": {
+    "name": "Pitch Black (Variante 2, unsicher)",
+    "tcgdexId": "me05",
+    "uncertain": true
+  },
+  "6569": {
+    "name": "Pitch Black",
+    "tcgdexId": "me05"
+  },
+  "6595": {
+    "name": "Prismatic Evolutions (Variante 2, unsicher)",
+    "tcgdexId": "sv08.5",
+    "uncertain": true
+  },
+  "6601": {
+    "name": "30th Celebration",
+    "tcgdexId": "30th"
+  },
+  "6602": {
+    "name": "30th Celebration (Variante 3, unsicher)",
+    "tcgdexId": "30th",
+    "uncertain": true
+  },
+  "6603": {
+    "name": "30th Celebration (Variante 4, unsicher)",
+    "tcgdexId": "30th",
+    "uncertain": true
+  },
+  "6604": {
+    "name": "30th Celebration (Variante 2, unsicher)",
+    "tcgdexId": "30th",
+    "uncertain": true
+  },
+  "6633": {
+    "name": "Destined Rivals (Variante 2, unsicher)",
+    "tcgdexId": "sv10",
+    "uncertain": true
+  }
 }

@@ -71,7 +71,10 @@ function normalizeCard(card, lang) {
     name: card.name,
     number: card.localId || null,
     images: { small: imgSmall || img, large: img },
+    // Angriffsnamen (für den Preisabgleich mit Cardmarket)
+    attacks: (card.attacks || []).map(a => a.name).filter(Boolean),
     set: {
+      id: card.set?.id || null,
       name: card.set?.name || null,
       total: card.set?.cardCount?.official ?? null
     },
@@ -174,6 +177,41 @@ async function collectIds(parsed, set, useServerNumberFilter) {
   return idToLang;
 }
 
+// Englischer Name + Angriffe einer Karte (Cardmarket-Namen sind englisch). Wird gemerkt.
+const englishCache = new Map();
+async function getEnglish(card) {
+  if (card._lang === 'en') return { name: card.name, attacks: card.attacks || [] };
+  if (englishCache.has(card.id)) return englishCache.get(card.id);
+  const res = await axios.get(`${TCGDEX_BASE}/en/cards/${card.id}`, { timeout: 10000 });
+  const en = { name: res.data.name, attacks: (res.data.attacks || []).map(a => a.name).filter(Boolean) };
+  englishCache.set(card.id, en);
+  return en;
+}
+
+// Sucht zur TCGdex-Karte das passende Cardmarket-Produkt (gleiches Set, gleicher
+// Name, bei mehreren Versionen gleiche Angriffe) und nimmt dessen Tagespreise.
+async function enrichWithCardmarket(card) {
+  try {
+    const setId = card.set?.id;
+    if (!setId || !cardmarket.hasSet(setId)) return card;
+    const en = await getEnglish(card);
+    const cands = cardmarket.candidates(setId, en.name);
+    if (cands.length === 0) return card;
+    const product = cands.length === 1 ? cands[0] : cardmarket.pickByAttacks(cands, en.attacks);
+    return product ? cardmarket.applyProduct(card, product) : card;
+  } catch (e) {
+    return card; // Abgleich ist nur ein Bonus: bei Fehlern bleibt der TCGdex-Preis
+  }
+}
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const n = i++; out[n] = await fn(items[n]); }
+  }));
+  return out;
+}
+
 app.get('/api/cards', async (req, res) => {
   try {
     const { name, set } = req.query;
@@ -223,6 +261,8 @@ app.get('/api/cards', async (req, res) => {
     if (parsed.number?.total) {
       results = results.filter(c => c.set.total == null || String(c.set.total) === parsed.number.total);
     }
+
+    results = await mapLimit(results, 8, enrichWithCardmarket);
 
     results.sort((a, b) =>
       (a.name || '').localeCompare(b.name || '') || (a.set?.name || '').localeCompare(b.set?.name || '')

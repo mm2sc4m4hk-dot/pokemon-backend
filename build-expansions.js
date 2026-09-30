@@ -52,7 +52,7 @@ async function main() {
   const detailed = await pool(sets, 5, async (s) => {
     try {
       const d = await get(`${TCGDEX}/sets/${s.id}`);
-      return { name: d.name, counts: count((d.cards || []).map(c => words(c.name))) };
+      return { id: s.id, name: d.name, counts: count((d.cards || []).map(c => words(c.name))) };
     } catch (e) { return null; }
   });
   const tcg = detailed.filter(Boolean);
@@ -63,7 +63,7 @@ async function main() {
     const cm = count(names);
     let best = null, bestScore = 0;
     for (const s of tcg) { const sc = score(cm, s.counts); if (sc > bestScore) { bestScore = sc; best = s; } }
-    matches.push({ id, name: best && bestScore >= MIN_SCORE ? best.name : null, score: bestScore, cards: names.length });
+    matches.push({ id, name: best && bestScore >= MIN_SCORE ? best.name : null, tcgdexId: best ? best.id : null, score: bestScore, cards: names.length });
   }
 
   // Mehrere Cardmarket-Sets auf denselben Namen (z.B. JP- und EN-Version):
@@ -71,7 +71,8 @@ async function main() {
   const result = {}; const seen = new Map();
   matches.filter(m => m.name).sort((a, b) => b.score - a.score).forEach(m => {
     const n = (seen.get(m.name) || 0); seen.set(m.name, n + 1);
-    result[m.id] = n === 0 ? m.name : `${m.name} (Variante ${n + 1}, unsicher)`;
+    // uncertain = Zweitzuordnung auf denselben Namen -> wird nicht für den Preisabgleich genutzt
+    result[m.id] = n === 0 ? { name: m.name, tcgdexId: m.tcgdexId } : { name: `${m.name} (Variante ${n + 1}, unsicher)`, tcgdexId: m.tcgdexId, uncertain: true };
   });
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });

@@ -17,7 +17,9 @@ const PRODUCTS_URL = process.env.CM_PRODUCTS_URL || '';
 const REFRESH_MS = 12 * 60 * 60 * 1000; // zweimal täglich nachsehen
 
 let index = [];
-let expansionNames = {};
+let expansionNames = {};   // id -> Anzeigename
+let setToExpansions = new Map(); // TCGdex-Set-ID -> [Cardmarket-Set-IDs]
+let byExpName = new Map();       // `${expansionId}|${basisname}` -> [Produkte]
 const meta = { loadedAt: null, products: 0, priceGuideDate: null, error: null };
 
 const words = (s) =>
@@ -42,9 +44,13 @@ function build(priceFile, productFile) {
   for (const p of productFile.products || []) {
     // "Sceptile [Leaf Blade | Power Poison]" -> Basisname "Sceptile"
     const base = String(p.name || '').split(/\s*[\[(]/)[0];
+    // Angriffsnamen aus "[Angriff A | Angriff B]" (für den genauen Abgleich)
+    const br = String(p.name).match(/\[(.*)\]/);
+    const attacks = br ? br[1].split('|').map(a => words(a)).filter(Boolean) : [];
     list.push({
       id: p.idProduct,
       name: p.name,
+      attacks,
       baseWords: words(base),
       expansionId: p.idExpansion,
       price: prices.get(p.idProduct) || null
@@ -69,13 +75,36 @@ async function refresh() {
     meta.priceGuideDate = built.date;
     meta.loadedAt = new Date().toISOString();
     meta.error = null;
-    try { expansionNames = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expansions.json'), 'utf8')); } catch (e) { /* optional */ }
+    loadExpansions();
+    byExpName = new Map();
+    for (const p of index) {
+      const k = `${p.expansionId}|${p.baseWords}`;
+      if (!byExpName.has(k)) byExpName.set(k, []);
+      byExpName.get(k).push(p);
+    }
     console.log(`Cardmarket-Index geladen: ${index.length} Produkte (Price Guide ${built.date})`);
     return true;
   } catch (e) {
     meta.error = e.message;
     console.error('Cardmarket-Dateien laden fehlgeschlagen:', e.message);
     return false;
+  }
+}
+
+// expansions.json: { "1585": { "name": "...", "tcgdexId": "xy5", "uncertain": false } }
+// (ältere Dateien mit reinen Text-Namen funktionieren für die Anzeige weiter,
+// aber nicht für den Preisabgleich -> build-expansions.js neu ausführen)
+function loadExpansions() {
+  expansionNames = {}; setToExpansions = new Map();
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expansions.json'), 'utf8')); } catch (e) { return; }
+  for (const [id, v] of Object.entries(raw)) {
+    if (typeof v === 'string') { expansionNames[id] = v; continue; }
+    expansionNames[id] = v.name;
+    if (v.tcgdexId && !v.uncertain) {
+      if (!setToExpansions.has(v.tcgdexId)) setToExpansions.set(v.tcgdexId, []);
+      setToExpansions.get(v.tcgdexId).push(Number(id));
+    }
   }
 }
 
@@ -121,4 +150,46 @@ function search(query, limit = 40) {
   return hits.slice(0, limit).map(toCard);
 }
 
-module.exports = { init, refresh, search, meta };
+// ---- Genauer Abgleich TCGdex-Karte <-> Cardmarket-Produkt ----
+const hasSet = (tcgdexSetId) => setToExpansions.has(tcgdexSetId);
+
+// Alle Produkte mit diesem englischen Kartennamen in den Cardmarket-Sets,
+// die zum TCGdex-Set gehören.
+function candidates(tcgdexSetId, englishName) {
+  const base = words(String(englishName).split(/\s*[\[(]/)[0]);
+  const out = [];
+  for (const exp of setToExpansions.get(tcgdexSetId) || []) out.push(...(byExpName.get(`${exp}|${base}`) || []));
+  return out;
+}
+
+// Mehrere Versionen derselben Karte im Set: über die Angriffsnamen eindeutig machen.
+function pickByAttacks(cands, tcgdexAttackNames) {
+  const have = new Set((tcgdexAttackNames || []).map(words));
+  if (have.size === 0) return null;
+  const fit = cands.filter(p => p.attacks.length > 0 && p.attacks.every(a => have.has(a)));
+  if (fit.length === 1) return fit[0];
+  const exact = fit.filter(p => p.attacks.length === have.size);
+  return exact.length === 1 ? exact[0] : null;
+}
+
+// Preise der Tagesdatei in die TCGdex-Karte übernehmen. Weicht der Trend stark
+// vom bisherigen Wert ab (Faktor > 3), war der Treffer vermutlich falsch -> nichts ändern.
+function applyProduct(card, product) {
+  const r = product.price;
+  if (!r) return card;
+  const prices = { ...(card.cardmarket?.prices || {}) };
+  const newTrend = r.trend ?? r.avg;
+  const oldTrend = prices.trendPrice;
+  if (oldTrend > 0 && newTrend > 0 && (newTrend / oldTrend > 3 || newTrend / oldTrend < 1 / 3)) return card;
+  const map = { trendPrice: newTrend, averageSellPrice: r.avg, avg1: r.avg1, avg7: r.avg7, avg30: r.avg30, low: r.low,
+    trendPriceHolo: r['trend-holo'] ?? r['avg-holo'], avg1Holo: r['avg1-holo'], avg7Holo: r['avg7-holo'],
+    avg30Holo: r['avg30-holo'], lowHolo: r['low-holo'] };
+  for (const [k, v] of Object.entries(map)) if (v != null) prices[k] = v;
+  return {
+    ...card,
+    cardmarket: { ...card.cardmarket, prices, productId: product.id, priceSource: 'cardmarket-daily',
+      priceDate: String(meta.priceGuideDate || '').slice(0, 10) }
+  };
+}
+
+module.exports = { init, refresh, search, meta, hasSet, candidates, pickByAttacks, applyProduct };
