@@ -234,6 +234,62 @@ app.get('/api/sets/:id', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// Preis-Aktualisierung: das Frontend schickt die Karten-IDs der Collection
+// und Watchlist und bekommt die aktuellen Cardmarket-Preise zurück.
+// Ergebnisse werden 1 Stunde im Speicher gehalten, damit mehrfaches
+// Aktualisieren (oder mehrere Nutzer) TCGdex nicht unnötig belasten.
+// ---------------------------------------------------------------------
+const priceCache = new Map(); // id -> { at, data }
+const PRICE_TTL_MS = 60 * 60 * 1000;
+
+async function refreshOne(id) {
+  const hit = priceCache.get(id);
+  if (hit && Date.now() - hit.at < PRICE_TTL_MS) return hit.data;
+
+  let data = null;
+  if (id.startsWith('cm-')) {
+    // Treffer, die nur aus der Cardmarket-Datei stammen
+    data = cardmarket.pricesOfProduct(Number(id.slice(3)));
+  } else if (!id.startsWith('custom-')) {
+    let card = null;
+    for (const lang of ['en', 'de']) {
+      try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
+    }
+    if (card) {
+      card = await enrichWithCardmarket(card);
+      data = {
+        prices: card.cardmarket.prices,
+        productId: card.cardmarket.productId || null,
+        priceSource: card.cardmarket.priceSource || 'tcgdex',
+        priceDate: card.cardmarket.priceDate || null
+      };
+    }
+  }
+  if (data) priceCache.set(id, { at: Date.now(), data });
+  return data;
+}
+
+app.post('/api/prices', async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(String))].slice(0, 60);
+    if (ids.length === 0) return res.status(400).json({ error: 'ids fehlen' });
+
+    const prices = {};
+    await mapLimit(ids, 6, async (id) => {
+      try {
+        const d = await refreshOne(id);
+        if (d) prices[id] = d;
+      } catch (e) { /* einzelne Karte überspringen */ }
+    });
+    res.json({ prices, priceGuideDate: cardmarket.meta.priceGuideDate });
+  } catch (e) {
+    console.error('Preis-Refresh Fehler:', e.message);
+    res.status(500).json({ error: 'Preise konnten nicht aktualisiert werden.' });
+  }
+});
+
 app.get('/api/cards', async (req, res) => {
   try {
     const { name, set } = req.query;

@@ -20,6 +20,7 @@ let index = [];
 let expansionNames = {};   // id -> Anzeigename
 let setToExpansions = new Map(); // TCGdex-Set-ID -> [Cardmarket-Set-IDs]
 let byExpName = new Map();       // `${expansionId}|${basisname}` -> [Produkte]
+let byId = new Map();            // Cardmarket-Produkt-ID -> Produkt
 const meta = { loadedAt: null, products: 0, priceGuideDate: null, error: null };
 
 const words = (s) =>
@@ -71,6 +72,7 @@ async function refresh() {
     }
     const built = build(priceFile, productFile);
     index = built.list;
+    byId = new Map(index.map(p => [p.id, p]));
     meta.products = index.length;
     meta.priceGuideDate = built.date;
     meta.loadedAt = new Date().toISOString();
@@ -192,4 +194,16 @@ function applyProduct(card, product) {
   };
 }
 
-module.exports = { init, refresh, search, meta, hasSet, candidates, pickByAttacks, applyProduct };
+// Aktuelle Preise zu einer Cardmarket-Produkt-ID (für den Preis-Refresh von "cm-"-Karten)
+function pricesOfProduct(productId) {
+  const p = byId.get(productId);
+  if (!p || !p.price) return null;
+  return {
+    prices: toCard(p).cardmarket.prices,
+    productId: p.id,
+    priceSource: 'cardmarket-daily',
+    priceDate: String(meta.priceGuideDate || '').slice(0, 10)
+  };
+}
+
+module.exports = { init, refresh, search, meta, hasSet, candidates, pickByAttacks, applyProduct, pricesOfProduct };
