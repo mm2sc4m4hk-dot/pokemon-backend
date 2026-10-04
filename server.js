@@ -213,7 +213,15 @@ async function collectIds(parsed, set, useServerNumberFilter) {
   );
   const [deBriefs, enBriefs] = lists;
 
-  const keep = (b) => !parsed.number || matchesNumber(b.localId, parsed.number);
+  // Promo-Nummern wie "SVP044": TCGdex führt die Karte als Set "svp" mit localId "044" (ohne Präfix)
+  const promoMatch = (b) => {
+    const n = parsed.number;
+    if (!n || !n.prefix) return false;
+    if (!String(b.id || '').toLowerCase().startsWith(`${n.prefix.toLowerCase()}-`)) return false;
+    const p = splitLocalId(b.localId);
+    return !!p && p.prefix === '' && p.digits === n.digits && p.suffix === (n.suffix || '');
+  };
+  const keep = (b) => !parsed.number || matchesNumber(b.localId, parsed.number) || promoMatch(b);
 
   const idToLang = new Map();
   deBriefs.filter(keep).forEach(b => idToLang.set(b.id, 'de'));
@@ -620,7 +628,12 @@ app.post('/api/wantlist-names', async (req, res) => {
       if (wantCache.has(id)) { names[id] = wantCache.get(id); return; }
       try {
         const r = await axios.get(`${TCGDEX_BASE}/en/cards/${encodeURIComponent(id)}`, { timeout: 10000 });
-        const v = { name: r.data.name, set: r.data.set?.name || null };
+        const v = {
+          name: r.data.name,
+          set: r.data.set?.name || null,
+          abilities: (r.data.abilities || []).map((a) => a.name).filter(Boolean),
+          attacks: (r.data.attacks || []).map((a) => a.name).filter(Boolean)
+        };
         if (wantCache.size > 5000) wantCache.clear();
         wantCache.set(id, v); names[id] = v;
       } catch (e) { /* Karte überspringen -> Frontend nimmt den gespeicherten Namen */ }
