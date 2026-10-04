@@ -14,6 +14,6 @@ jobs:
     steps:
       - name: Tages-Job anstoßen
         run: |
-          curl -fsS --retry 3 --retry-delay 30 --max-time 900 -X POST \
+          curl -fsS -g --retry 3 --retry-delay 30 --max-time 900 -X POST \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.BACKEND_URL }}/api/cron/daily?wait=1"
