@@ -6,7 +6,8 @@
 //   CM_PRODUCTS_URL     direkter Link zur Produktkatalog-JSON (Einzelkarten)
 // Alternativ liegen die Dateien lokal unter data/price_guide.json und
 // data/products_singles.json. Optional: data/expansions.json
-// ({ "1585": "Primal Clash", ... }) für lesbare Set-Namen.
+// ({ "1585": { "name": "Primal Clash", "tcgdexId": "xy5" }, ... }) für Set-Namen und
+// den genauen Preisabgleich (erzeugt von build-expansions.js).
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
@@ -22,6 +23,9 @@ let setToExpansions = new Map(); // TCGdex-Set-ID -> [Cardmarket-Set-IDs]
 let byExpName = new Map();       // `${expansionId}|${basisname}` -> [Produkte]
 let byId = new Map();            // Cardmarket-Produkt-ID -> Produkt
 const meta = { loadedAt: null, products: 0, priceGuideDate: null, error: null };
+
+// Cardmarket nennt die Holo-Reihe je nach Datei "-holo" oder "-foil": beide Schreibweisen lesen
+const holoField = (r, base) => r[`${base}-holo`] ?? r[`${base}-foil`];
 
 const words = (s) =>
   String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -60,7 +64,20 @@ function build(priceFile, productFile) {
   return { list, date: priceFile.createdAt || null };
 }
 
+let refreshing = null;
 async function refresh() {
+  if (refreshing) return refreshing; // läuft schon -> dasselbe Promise teilen (spart RAM)
+  refreshing = doRefresh().finally(() => { refreshing = null; });
+  return refreshing;
+}
+
+// Nur neu laden, wenn der Index älter als maxAgeMs ist (für den Tages-Job)
+async function refreshIfStale(maxAgeMs = 6 * 60 * 60 * 1000) {
+  const age = meta.loadedAt ? Date.now() - new Date(meta.loadedAt).getTime() : Infinity;
+  return age > maxAgeMs ? refresh() : false;
+}
+
+async function doRefresh() {
   try {
     const [priceFile, productFile] = await Promise.all([
       loadJson(PRICE_URL, 'price_guide.json'),
@@ -135,9 +152,9 @@ function toCard(p) {
         averageSellPrice: r.avg ?? 0,
         avg1: r.avg1 ?? 0, avg7: r.avg7 ?? 0, avg30: r.avg30 ?? 0,
         low: r.low ?? 0,
-        trendPriceHolo: r['trend-holo'] ?? r['avg-holo'] ?? 0,
-        avg1Holo: r['avg1-holo'] ?? 0, avg7Holo: r['avg7-holo'] ?? 0, avg30Holo: r['avg30-holo'] ?? 0,
-        lowHolo: r['low-holo'] ?? 0
+        trendPriceHolo: holoField(r, 'trend') ?? holoField(r, 'avg') ?? 0,
+        avg1Holo: holoField(r, 'avg1') ?? 0, avg7Holo: holoField(r, 'avg7') ?? 0, avg30Holo: holoField(r, 'avg30') ?? 0,
+        lowHolo: holoField(r, 'low') ?? 0
       }
     }
   };
@@ -185,16 +202,25 @@ function applyProduct(card, product) {
   const prices = { ...(card.cardmarket?.prices || {}) };
   const newTrend = r.trend ?? r.avg;
   const oldTrend = prices.trendPrice;
-  if (oldTrend > 0 && newTrend > 0 && (newTrend / oldTrend > 3 || newTrend / oldTrend < 1 / 3)) return card;
+  if (oldTrend > 0 && newTrend > 0 && (newTrend / oldTrend > 3 || newTrend / oldTrend < 1 / 3)) {
+    console.warn(`Cardmarket-Abgleich verworfen (Preis-Faktor > 3): ${product.name} alt ${oldTrend} neu ${newTrend}`);
+    return card;
+  }
   const map = { trendPrice: newTrend, averageSellPrice: r.avg, avg1: r.avg1, avg7: r.avg7, avg30: r.avg30, low: r.low,
-    trendPriceHolo: r['trend-holo'] ?? r['avg-holo'], avg1Holo: r['avg1-holo'], avg7Holo: r['avg7-holo'],
-    avg30Holo: r['avg30-holo'], lowHolo: r['low-holo'] };
+    trendPriceHolo: holoField(r, 'trend') ?? holoField(r, 'avg'), avg1Holo: holoField(r, 'avg1'), avg7Holo: holoField(r, 'avg7'),
+    avg30Holo: holoField(r, 'avg30'), lowHolo: holoField(r, 'low') };
   for (const [k, v] of Object.entries(map)) if (v != null) prices[k] = v;
   return {
     ...card,
     cardmarket: { ...card.cardmarket, prices, productId: product.id, priceSource: 'cardmarket-daily',
       priceDate: String(meta.priceGuideDate || '').slice(0, 10) }
   };
+}
+
+// Vollständiges Karten-Objekt zu einer Cardmarket-Produkt-ID (für "cm-"-Karten)
+function cardOfProduct(productId) {
+  const p = byId.get(productId);
+  return p ? toCard(p) : null;
 }
 
 // Aktuelle Preise zu einer Cardmarket-Produkt-ID (für den Preis-Refresh von "cm-"-Karten)
@@ -209,4 +235,4 @@ function pricesOfProduct(productId) {
   };
 }
 
-module.exports = { init, ready, refresh, search, meta, hasSet, candidates, pickByAttacks, applyProduct, pricesOfProduct };
+module.exports = { init, ready, refresh, refreshIfStale, search, meta, hasSet, candidates, pickByAttacks, applyProduct, pricesOfProduct, cardOfProduct };

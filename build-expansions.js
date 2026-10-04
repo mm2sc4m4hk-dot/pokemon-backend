@@ -1,5 +1,5 @@
 // Einmal lokal ausführen:  node build-expansions.js [pfad/zu/products_singles.json]
-// Erzeugt data/expansions.json ({ "1585": "Primal Clash", ... }), indem die
+// Erzeugt data/expansions.json ({ "1585": { "name": "Primal Clash", "tcgdexId": "xy5" }, ... }), indem die
 // Kartennamen jedes Cardmarket-Sets mit den Sets von TCGdex verglichen werden.
 // Cardmarkets Dateien enthalten nur Set-NUMMERN, keine Namen.
 const axios = require('axios');

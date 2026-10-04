@@ -4,8 +4,34 @@ const axios = require('axios');
 const cardmarket = require('./cardmarket');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
+
+// CORS: auf Render unter ALLOWED_ORIGINS (kommagetrennt, z. B. https://deine-app.vercel.app) eintragen.
+// Ohne die Variable bleibt alles offen wie bisher. Anfragen ohne Origin (Cron, curl) gehen immer durch.
+const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
+app.use(cors(allowedOrigins.length
+  ? { origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)) }
+  : undefined));
+app.use(express.json({ limit: '100kb' }));
+
+// Kleines Rate-Limit ohne Zusatzpaket: max. N Anfragen pro Minute und IP
+function rateLimit(max, windowMs = 60 * 1000) {
+  const hits = new Map(); // ip -> { count, resetAt }
+  setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k); }, windowMs).unref();
+  return (req, res, next) => {
+    const now = Date.now();
+    const h = hits.get(req.ip);
+    if (!h || h.resetAt <= now) { hits.set(req.ip, { count: 1, resetAt: now + windowMs }); return next(); }
+    h.count += 1;
+    if (h.count > max) {
+      res.set('Retry-After', String(Math.ceil((h.resetAt - now) / 1000)));
+      return res.status(429).json({ error: 'Zu viele Anfragen. Bitte kurz warten.' });
+    }
+    next();
+  };
+}
+app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices'], rateLimit(120));
+app.use('/api/img', rateLimit(600));
 
 // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
 // Kostenlos, kein API-Key, echte Cardmarket-Preise (EUR) direkt im
@@ -483,10 +509,37 @@ app.post('/api/card-meta', async (req, res) => {
   }
 });
 
+// Mehrere Karten auf einmal komplett laden (inkl. Cardmarket-Preise) – z. B. "Alle in die Wishlist"
+app.post('/api/cards/bulk', async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(String))].filter((id) => id && !id.startsWith('custom-')).slice(0, 40);
+    if (ids.length === 0) return res.status(400).json({ error: 'ids fehlen' });
+    await cardmarket.ready();
+    const found = await mapLimit(ids, 6, async (id) => {
+      try {
+        if (id.startsWith('cm-')) return cardmarket.cardOfProduct(Number(id.slice(3)));
+        let card = null;
+        for (const lang of ['de', 'en']) {
+          try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
+        }
+        return card ? await enrichWithCardmarket(card) : null;
+      } catch (e) {
+        return null;
+      }
+    });
+    res.json({ cards: found.filter(Boolean) });
+  } catch (e) {
+    console.error('Bulk-Karten Fehler:', e.message);
+    res.status(500).json({ error: 'Karten konnten nicht geladen werden.' });
+  }
+});
+
 app.get('/api/cards', async (req, res) => {
   try {
-    const { name, set } = req.query;
-    if (!name || !name.trim()) {
+    const name = typeof req.query.name === 'string' ? req.query.name : '';
+    const set = typeof req.query.set === 'string' ? req.query.set : '';
+    if (!name.trim()) {
       return res.status(400).json({ error: 'Name ist erforderlich' });
     }
     const parsed = parseQuery(name);

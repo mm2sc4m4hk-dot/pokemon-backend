@@ -239,7 +239,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     running = true; last.startedAt = new Date().toISOString(); last.error = null;
     try {
       const db = getFirestore();
-      await cardmarket.refresh();
+      await cardmarket.refreshIfStale(); // Index wird ohnehin alle 12 h erneuert -> kein doppeltes Laden (RAM)
       const day = String(cardmarket.meta.priceGuideDate || '').slice(0, 10) || todayUtc();
 
       const { ids, watchEntries } = await gather(db);
@@ -295,7 +295,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     app.post('/api/cron/daily', async (req, res) => {
       const secret = process.env.CRON_SECRET;
       if (!secret || !safeEqual(req.get('x-cron-secret'), secret)) return res.status(401).json({ error: 'unauthorized' });
-      if (req.query.wait) {
+      if (['1', 'true', 'yes'].includes(String(req.query.wait || '').toLowerCase())) {
         try { res.json({ ok: true, ...(await runDaily()) }); }
         catch (e) { console.error('Daily-Job Fehler:', e); res.status(500).json({ ok: false, error: e.message }); }
         return;
@@ -312,10 +312,14 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
 
     app.post('/api/push/test', async (req, res) => {
       if (!pushReady) return res.status(503).json({ error: 'Push ist auf dem Server nicht eingerichtet.' });
+      let decoded;
       try {
         const token = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-        const auth = getAuth();
-        const decoded = await auth.verifyIdToken(token);
+        decoded = await getAuth().verifyIdToken(token);
+      } catch (e) {
+        return res.status(401).json({ error: 'Nicht angemeldet.' });
+      }
+      try {
         const db = getFirestore();
         const r = await sendToUser(db, decoded.uid, {
           title: '🔔 Push funktioniert', body: 'So meldet dich PokéTracker, wenn ein Zielpreis erreicht ist.', url: '/?tab=watchlist', tag: 'push-test'
@@ -323,7 +327,8 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
         if (r.subs === 0) return res.status(404).json({ error: 'Für dieses Konto ist kein Gerät registriert.' });
         res.json(r);
       } catch (e) {
-        res.status(401).json({ error: 'Nicht angemeldet.' });
+        console.error('Push-Test Fehler:', e.message);
+        res.status(500).json({ error: 'Push konnte nicht gesendet werden.' });
       }
     });
   }
