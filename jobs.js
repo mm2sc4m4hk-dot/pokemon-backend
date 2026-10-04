@@ -131,13 +131,24 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
 
   async function gather(db) {
     const [coll, watch, binders] = await Promise.all([
-      db.collectionGroup('collection').select('id').get(),
+      db.collectionGroup('collection').select('id', 'name', 'userVariant', 'alertHigh', 'alertedHigh', 'userGrade').get(),
       db.collectionGroup('watchlist').get(),
       db.collectionGroup('binders').select('slots').get()
     ]);
     const ids = new Set();
     const add = (id) => { if (id && !String(id).startsWith('custom-')) ids.add(String(id)); };
-    coll.forEach((d) => add(d.get('id')));
+    const collEntries = [];
+    coll.forEach((d) => {
+      add(d.get('id'));
+      const hi = parseFloat(d.get('alertHigh')) || 0;
+      // Gegradete Karten haben eigene Preise (PSA 10 ≠ Rohpreis) -> der Server kennt nur Rohpreise, also kein Alarm
+      if (hi > 0 && d.get('id') && !d.get('userGrade')) {
+        collEntries.push({
+          uid: d.ref.parent.parent.id, id: String(d.get('id')), ref: d.ref,
+          data: { name: d.get('name'), userVariant: d.get('userVariant'), alertHigh: hi, alertedHigh: d.get('alertedHigh') }
+        });
+      }
+    });
     const watchEntries = [];
     watch.forEach((d) => {
       add(d.id);
@@ -147,7 +158,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
       const slots = d.get('slots') || {};
       Object.values(slots).forEach((s) => add(s && s.id));
     });
-    return { ids: [...ids], watchEntries };
+    return { ids: [...ids], watchEntries, collEntries };
   }
 
   async function readDocs(db, collectionName, ids) {
@@ -189,46 +200,66 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     return { sent, failed, subs: subsSnap.size };
   }
 
-  async function sendTargetAlerts(db, watchEntries, freshById) {
+  // Preis für eine Variante (Reverse/Holo -> Holo-Trend, sonst Normal-Trend)
+  const trendFor = (prices, variant) => (['reverse', 'holo'].includes(variant) ? (holoOf(prices) || trendOf(prices)) : (trendOf(prices) || holoOf(prices)));
+  // Trend deutlich über dem 30-Tage-Schnitt -> evtl. Ausreißer (steht dann in der Push-Nachricht)
+  const spike = (prices) => { const t = trendOf(prices); const a = Number(prices && prices.avg30) || 0; return t >= 1 && a > 0 && t / a >= 1.6; };
+
+  // Zielpreis nach unten (Watchlist: targetPrice), Alarm nach oben (Watchlist: targetHigh, Collection: alertHigh)
+  async function sendPriceAlerts(db, watchEntries, collEntries, freshById) {
     const byUser = new Map();
     const resets = [];
-    for (const w of watchEntries) {
-      const target = parseFloat(w.data.targetPrice) || 0;
-      const fresh = freshById.get(w.id);
-      const cur = watchPrice(fresh ? fresh.prices : (w.data.cardmarket && w.data.cardmarket.prices));
-      if (!(target > 0) || !(cur > 0)) continue;
-      if (cur <= target) {
-        if (w.data.alertedTarget !== target) {
-          if (!byUser.has(w.uid)) byUser.set(w.uid, []);
-          byUser.get(w.uid).push({ w, name: plain(w.data.name), cur, target });
+    const check = ({ uid, ref, data, name, cur, limit, dir, field, prices }) => {
+      if (!(limit > 0) || !(cur > 0)) return;
+      const hit = dir === 'down' ? cur <= limit : cur >= limit;
+      if (hit) {
+        if (data[field] !== limit) {
+          if (!byUser.has(uid)) byUser.set(uid, []);
+          byUser.get(uid).push({ ref, name, cur, limit, dir, field, odd: dir === 'up' && spike(prices) });
         }
-      } else if (w.data.alertedTarget != null) {
-        resets.push(w.ref);
+      } else if (data[field] != null) {
+        resets.push({ ref, field });
       }
+    };
+
+    for (const w of watchEntries) {
+      const fresh = freshById.get(w.id);
+      const prices = fresh ? fresh.prices : (w.data.cardmarket && w.data.cardmarket.prices);
+      const cur = watchPrice(prices);
+      const name = plain(w.data.name);
+      check({ uid: w.uid, ref: w.ref, data: w.data, name, cur, limit: parseFloat(w.data.targetPrice) || 0, dir: 'down', field: 'alertedTarget', prices });
+      check({ uid: w.uid, ref: w.ref, data: w.data, name, cur, limit: parseFloat(w.data.targetHigh) || 0, dir: 'up', field: 'alertedHigh', prices });
+    }
+    for (const c of collEntries) {
+      const fresh = freshById.get(c.id);
+      if (!fresh) continue;
+      check({ uid: c.uid, ref: c.ref, data: c.data, name: plain(c.data.name), cur: trendFor(fresh.prices, c.data.userVariant), limit: c.data.alertHigh, dir: 'up', field: 'alertedHigh', prices: fresh.prices });
     }
 
     let notifiedUsers = 0; let notifiedCards = 0;
     for (const [uid, hits] of byUser) {
-      hits.sort((a, b) => (a.cur / a.target) - (b.cur / b.target));
+      hits.sort((a, b) => a.name.localeCompare(b.name));
       const one = hits.length === 1;
+      const h0 = hits[0];
+      const line = (h) => (h.dir === 'down'
+        ? `${h.name}: ${eur(h.cur)} (Ziel ${eur(h.limit)})`
+        : `${h.name}: ${eur(h.cur)} (Alarm ab ${eur(h.limit)})${h.odd ? ' – ⚠️ evtl. Ausreißer' : ''}`);
       const payload = {
-        title: one ? '🎯 Zielpreis erreicht' : `🎯 ${hits.length} Karten haben ihren Zielpreis erreicht`,
-        body: one
-          ? `${hits[0].name}: ${eur(hits[0].cur)} (Ziel ${eur(hits[0].target)})`
-          : hits.slice(0, 3).map((h) => `${h.name} ${eur(h.cur)}`).join(' · ') + (hits.length > 3 ? ` · +${hits.length - 3}` : ''),
+        title: one ? (h0.dir === 'down' ? '🎯 Zielpreis erreicht' : '📈 Preis über Alarm-Grenze') : `🔔 ${hits.length} Preis-Alarme`,
+        body: one ? line(h0) : hits.slice(0, 3).map((h) => `${h.name} ${eur(h.cur)}${h.dir === 'up' ? ' ▲' : ' ▼'}`).join(' · ') + (hits.length > 3 ? ` · +${hits.length - 3}` : ''),
         url: '/?tab=watchlist',
-        tag: 'target-price'
+        tag: 'price-alert'
       };
       const res = await sendToUser(db, uid, payload);
       if (res.sent > 0) {
         notifiedUsers += 1; notifiedCards += hits.length;
-        await Promise.all(hits.map((h) => h.w.ref.update({
-          alertedTarget: h.target, alertedAt: Date.now(), alertedPrice: h.cur
+        await Promise.all(hits.map((h) => h.ref.update({
+          [h.field]: h.limit, alertedAt: Date.now(), alertedPrice: h.cur
         }).catch(() => {})));
       }
     }
     if (FieldValue?.delete) {
-      await Promise.all(resets.map((ref) => ref.update({ alertedTarget: FieldValue.delete() }).catch(() => {})));
+      await Promise.all(resets.map((r) => r.ref.update({ [r.field]: FieldValue.delete() }).catch(() => {})));
     }
     return { notifiedUsers, notifiedCards };
   }
@@ -242,7 +273,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
       await cardmarket.refreshIfStale(); // Index wird ohnehin alle 12 h erneuert -> kein doppeltes Laden (RAM)
       const day = String(cardmarket.meta.priceGuideDate || '').slice(0, 10) || todayUtc();
 
-      const { ids, watchEntries } = await gather(db);
+      const { ids, watchEntries, collEntries } = await gather(db);
       const [priceDocs, historyDocs] = await Promise.all([
         readDocs(db, 'cardPrices', ids), readDocs(db, 'cardHistory', ids)
       ]);
@@ -279,7 +310,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
       await writer.close();
 
       let alerts = { notifiedUsers: 0, notifiedCards: 0 };
-      if (pushReady) alerts = await sendTargetAlerts(db, watchEntries, freshById);
+      if (pushReady) alerts = await sendPriceAlerts(db, watchEntries, collEntries, freshById);
 
       last.result = { day, tracked: ids.length, priced: freshById.size, written, ...alerts };
       return last.result;

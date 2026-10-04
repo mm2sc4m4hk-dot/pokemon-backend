@@ -266,6 +266,25 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+// Liste aller Sets (für den Hinweis auf neue Sets im Frontend)
+let setsListCache = { at: 0, list: [] };
+app.get('/api/sets-list', async (req, res) => {
+  try {
+    if (!setsListCache.list.length || Date.now() - setsListCache.at > 6 * 60 * 60 * 1000) {
+      const r = await axios.get(`${TCGDEX_BASE}/en/sets`, { timeout: 20000 });
+      const list = (Array.isArray(r.data) ? r.data : []).map((s) => ({
+        id: s.id,
+        name: s.name,
+        total: s.cardCount?.total ?? s.cardCount?.official ?? 0
+      }));
+      setsListCache = { at: Date.now(), list };
+    }
+    res.json(setsListCache.list);
+  } catch (e) {
+    res.status(502).json({ error: 'Set-Liste konnte nicht geladen werden.' });
+  }
+});
+
 // Kartenliste eines Sets (für den Set-Fortschritt im Frontend)
 app.get('/api/sets/:id', async (req, res) => {
   try {
