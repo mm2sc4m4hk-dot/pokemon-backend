@@ -64,7 +64,7 @@ function safeEqual(a, b) {
 // Konfiguration, läuft der Rest des Servers ganz normal weiter)
 // ---------------------------------------------------------------------
 function initFirebase() {
-  if (admin.apps.length) return true;
+  if (admin.apps?.length) return true;
   let raw = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!raw) return false;
   try {
