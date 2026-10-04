@@ -110,10 +110,13 @@ function loadExpansions() {
   }
 }
 
+let readyPromise = null;
 function init() {
-  refresh();
+  readyPromise = refresh();
   setInterval(refresh, REFRESH_MS).unref();
 }
+// Löst auf, sobald der erste Ladeversuch durch ist (auch bei Fehler -> dann ohne Cardmarket-Daten weiter)
+const ready = () => readyPromise || Promise.resolve(false);
 
 function toCard(p) {
   const r = p.price || {};
@@ -206,4 +209,4 @@ function pricesOfProduct(productId) {
   };
 }
 
-module.exports = { init, refresh, search, meta, hasSet, candidates, pickByAttacks, applyProduct, pricesOfProduct };
+module.exports = { init, ready, refresh, search, meta, hasSet, candidates, pickByAttacks, applyProduct, pricesOfProduct };

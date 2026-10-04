@@ -210,6 +210,7 @@ async function getEnglish(card) {
 // Name, bei mehreren Versionen gleiche Angriffe) und nimmt dessen Tagespreise.
 async function enrichWithCardmarket(card) {
   try {
+    await cardmarket.ready(); // nach einem Kaltstart erst den Cardmarket-Index abwarten
     const setId = card.set?.id;
     if (!setId || !cardmarket.hasSet(setId)) return card;
     const en = await getEnglish(card);
@@ -255,15 +256,17 @@ app.get('/api/sets/:id', async (req, res) => {
 // ---------------------------------------------------------------------
 // Preis-Aktualisierung: das Frontend schickt die Karten-IDs der Collection
 // und Watchlist und bekommt die aktuellen Cardmarket-Preise zurück.
-// Ergebnisse werden 1 Stunde im Speicher gehalten, damit mehrfaches
+// Ergebnisse bleiben bis zur nächsten Cardmarket-Tagesdatei im Speicher, damit mehrfaches
 // Aktualisieren (oder mehrere Nutzer) TCGdex nicht unnötig belasten.
 // ---------------------------------------------------------------------
-const priceCache = new Map(); // id -> { at, data }
-const PRICE_TTL_MS = 60 * 60 * 1000;
+// Cardmarket aktualisiert nur einmal täglich: ein Eintrag gilt, solange die Tagesdatei (priceGuideDate)
+// dieselbe ist (höchstens 12 Stunden als Sicherheitsnetz). Der Tages-Job (jobs.js) wärmt den Cache vor.
+const priceCache = new Map(); // id -> { at, date, data }
+const PRICE_TTL_MS = 12 * 60 * 60 * 1000;
 
-async function refreshOne(id) {
+async function refreshOne(id, force = false) {
   const hit = priceCache.get(id);
-  if (hit && Date.now() - hit.at < PRICE_TTL_MS) return hit.data;
+  if (!force && hit && hit.date === (cardmarket.meta.priceGuideDate || null) && Date.now() - hit.at < PRICE_TTL_MS) return hit.data;
 
   let data = null;
   if (id.startsWith('cm-')) {
@@ -284,7 +287,7 @@ async function refreshOne(id) {
       };
     }
   }
-  if (data) priceCache.set(id, { at: Date.now(), data });
+  if (data) priceCache.set(id, { at: Date.now(), date: cardmarket.meta.priceGuideDate || null, data });
   return data;
 }
 
@@ -548,6 +551,9 @@ app.get('/api/cards', async (req, res) => {
     res.status(500).json({ error: 'Fehler beim Abrufen der Karten' });
   }
 });
+
+// Täglicher Job: Preis-Historie, Firestore-Preiscache, Push bei Zielpreis (siehe jobs.js)
+require('./jobs')({ cardmarket, refreshOne, mapLimit }).registerRoutes(app);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
