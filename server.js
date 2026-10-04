@@ -21,6 +21,21 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// Bild-Proxy (nur TCGdex-Assets): erlaubt dem Frontend, Kartenbilder in ein Canvas zu zeichnen
+// ("Binder-Seite als Bild teilen"), falls der Direktabruf wegen CORS nicht klappt.
+app.get('/api/img', async (req, res) => {
+  try {
+    const u = new URL(String(req.query.u || ''));
+    if (u.protocol !== 'https:' || u.hostname !== 'assets.tcgdex.net') return res.status(400).end();
+    const r = await axios.get(u.toString(), { responseType: 'arraybuffer', timeout: 15000 });
+    res.set('Content-Type', r.headers['content-type'] || 'image/webp');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(r.data));
+  } catch (e) {
+    res.status(502).end();
+  }
+});
+
 // ---------------------------------------------------------------------
 // Suchbegriff zerlegen: "Glumanda 044", "Glumanda 44/102", "Pikachu SV044",
 // "Glumanda #044" -> Name + Kartennummer (wie bei Cardmarket).
