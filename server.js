@@ -81,6 +81,9 @@ function normalizeCard(card, lang) {
     // Welche Druckvarianten es laut TCGdex gibt, z.B.
     // { normal: true, reverse: true, holo: false, firstEdition: false }
     variants: card.variants || null,
+    // Pokédex-Nummer(n) und Zeichner (für Pokédex-/Artist-Ansicht)
+    dexId: Array.isArray(card.dexId) ? card.dexId.map(Number).filter(Number.isFinite) : [],
+    illustrator: card.illustrator || null,
     // Cardmarket-Suchlink mit Name + Nummer (so findet Cardmarket die
     // Karte direkt, z.B. "Glumanda 044").
     cardmarket: {
@@ -287,6 +290,178 @@ app.post('/api/prices', async (req, res) => {
   } catch (e) {
     console.error('Preis-Refresh Fehler:', e.message);
     res.status(500).json({ error: 'Preise konnten nicht aktualisiert werden.' });
+  }
+});
+
+// ---------------------------------------------------------------------
+// Artist-, Pokédex- und Karten-Endpunkte für Artist-Ansicht, Pokédex und Binder
+// ---------------------------------------------------------------------
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Set-Namen und Reihenfolge (aus der Karten-ID wird die Set-ID abgeleitet)
+let setsIndex = { at: 0, names: new Map(), order: new Map() };
+async function getSetsIndex() {
+  if (setsIndex.names.size && Date.now() - setsIndex.at < 6 * 60 * 60 * 1000) return setsIndex;
+  const r = await axios.get(`${TCGDEX_BASE}/en/sets`, { timeout: 20000 });
+  const names = new Map(); const order = new Map();
+  (Array.isArray(r.data) ? r.data : []).forEach((s, i) => { names.set(s.id, s.name); order.set(s.id, i); });
+  setsIndex = { at: Date.now(), names, order };
+  return setsIndex;
+}
+
+function briefsToCards(briefs, idx) {
+  const num = (v) => parseInt(String(v).replace(/\D/g, ''), 10);
+  return (briefs || []).filter((b) => b && b.id).map((b) => {
+    const i = b.id.lastIndexOf('-');
+    const setId = i > 0 ? b.id.slice(0, i) : b.id;
+    return {
+      id: b.id,
+      localId: b.localId,
+      name: b.name,
+      image: b.image ? `${b.image}/low.webp` : '',
+      setId,
+      setName: idx.names.get(setId) || setId,
+      setOrder: idx.order.has(setId) ? idx.order.get(setId) : 99999
+    };
+  }).sort((a, b) =>
+    a.setOrder - b.setOrder || a.setId.localeCompare(b.setId) ||
+    ((num(a.localId) || 0) - (num(b.localId) || 0)) || String(a.localId).localeCompare(String(b.localId))
+  );
+}
+
+let illustratorCache = { at: 0, list: [] };
+app.get('/api/illustrators', async (req, res) => {
+  try {
+    if (!illustratorCache.list.length || Date.now() - illustratorCache.at > DAY_MS) {
+      const r = await axios.get(`${TCGDEX_BASE}/en/illustrators`, { timeout: 20000 });
+      const list = (Array.isArray(r.data) ? r.data : [])
+        .map((x) => (typeof x === 'string' ? x : x && x.name)).filter(Boolean)
+        .sort((a, b) => a.localeCompare(b));
+      illustratorCache = { at: Date.now(), list };
+    }
+    res.json(illustratorCache.list);
+  } catch (e) {
+    console.error('Illustrator-Liste:', e.response?.status || e.message);
+    res.status(502).json({ error: 'Artist-Liste konnte nicht geladen werden.' });
+  }
+});
+
+app.get('/api/illustrators/:name', async (req, res) => {
+  try {
+    const r = await axios.get(`${TCGDEX_BASE}/en/illustrators/${encodeURIComponent(req.params.name)}`, { timeout: 25000 });
+    const idx = await getSetsIndex().catch(() => ({ names: new Map(), order: new Map() }));
+    const cards = briefsToCards(r.data && r.data.cards, idx);
+    if (cards.length === 0) return res.status(404).json({ error: 'Keine Karten für diesen Artist.' });
+    res.json({ name: (r.data && r.data.name) || req.params.name, cards });
+  } catch (e) {
+    const status = e.response?.status === 404 ? 404 : 502;
+    res.status(status).json({ error: status === 404 ? 'Artist nicht gefunden.' : 'Artist konnte nicht geladen werden.' });
+  }
+});
+
+// Alle Karten eines Pokémon (nationale Pokédex-Nummer)
+app.get('/api/dex/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'Ungültige Pokédex-Nummer.' });
+    const r = await axios.get(`${TCGDEX_BASE}/en/dex-ids/${id}`, { timeout: 25000 });
+    const idx = await getSetsIndex().catch(() => ({ names: new Map(), order: new Map() }));
+    res.json({ id, cards: briefsToCards(r.data && r.data.cards, idx) });
+  } catch (e) {
+    const status = e.response?.status === 404 ? 404 : 502;
+    if (status === 404) return res.json({ id: parseInt(req.params.id, 10), cards: [] });
+    res.status(502).json({ error: 'Karten konnten nicht geladen werden.' });
+  }
+});
+
+// Pokédex-Liste (Nummer + Name, deutsch wenn verfügbar) aus der PokéAPI, 1x pro Tag
+let pokedexCache = { at: 0, data: null };
+async function gql(url, query) {
+  const r = await axios.post(url, { query }, { timeout: 30000, headers: { 'Content-Type': 'application/json' } });
+  if (r.data && r.data.errors) throw new Error(JSON.stringify(r.data.errors).slice(0, 200));
+  return r.data.data;
+}
+async function loadPokedex() {
+  const attempts = [
+    ['https://graphql.pokeapi.co/v1beta2', 'pokemonspecies', 'pokemonspeciesnames'],
+    ['https://beta.pokeapi.co/graphql/v1beta', 'pokemon_v2_pokemonspecies', 'pokemon_v2_pokemonspeciesnames']
+  ];
+  for (const [url, t, rel] of attempts) {
+    try {
+      const data = await gql(url, `{ ${t}(order_by: {id: asc}) { id ${rel}(where: {language_id: {_in: [6, 9]}}) { language_id name } } }`);
+      const rows = data[t] || [];
+      if (rows.length < 100) continue;
+      return { lang: 'de', list: rows.map((r) => {
+        const names = r[rel] || [];
+        const de = (names.find((n) => n.language_id === 6) || {}).name;
+        const en = (names.find((n) => n.language_id === 9) || {}).name;
+        return { id: r.id, name: de || en || `#${r.id}`, nameEn: en || de || `#${r.id}` };
+      }) };
+    } catch (e) {
+      console.error('Pokédex GraphQL fehlgeschlagen:', url, e.message);
+    }
+  }
+  // Fallback: REST-Liste (nur englische Namen)
+  const r = await axios.get('https://pokeapi.co/api/v2/pokemon-species?limit=3000', { timeout: 30000 });
+  const list = (r.data.results || []).map((s) => {
+    const id = Number(String(s.url).split('/').filter(Boolean).pop());
+    const name = s.name.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('-');
+    return { id, name, nameEn: name };
+  }).filter((x) => x.id).sort((a, b) => a.id - b.id);
+  return { lang: 'en', list };
+}
+app.get('/api/pokedex', async (req, res) => {
+  try {
+    if (!pokedexCache.data || Date.now() - pokedexCache.at > DAY_MS) {
+      pokedexCache = { at: Date.now(), data: await loadPokedex() };
+    }
+    res.json(pokedexCache.data);
+  } catch (e) {
+    console.error('Pokédex laden fehlgeschlagen:', e.message);
+    res.status(502).json({ error: 'Pokédex-Liste konnte nicht geladen werden.' });
+  }
+});
+
+// Einzelne Karte komplett (inkl. Cardmarket-Preise) – z. B. zum Hinzufügen zur Watchlist
+app.get('/api/card/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    let card = null;
+    for (const lang of ['de', 'en']) {
+      try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
+    }
+    if (!card) return res.status(404).json({ error: 'Karte nicht gefunden.' });
+    res.json(await enrichWithCardmarket(card));
+  } catch (e) {
+    res.status(502).json({ error: 'Karte konnte nicht geladen werden.' });
+  }
+});
+
+// Pokédex-Nummer(n) und Artist für viele Karten (einmaliges Nachladen für ältere Collection-Einträge)
+const metaCache = new Map();
+app.post('/api/card-meta', async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(String))].slice(0, 60);
+    const meta = {};
+    await mapLimit(ids, 6, async (id) => {
+      if (metaCache.has(id)) { meta[id] = metaCache.get(id); return; }
+      if (id.startsWith('custom-') || id.startsWith('cm-')) { meta[id] = { dexId: [], illustrator: null }; return; }
+      for (const lang of ['en', 'de']) {
+        try {
+          const r = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${encodeURIComponent(id)}`, { timeout: 10000 });
+          const m = {
+            dexId: Array.isArray(r.data.dexId) ? r.data.dexId.map(Number).filter(Number.isFinite) : [],
+            illustrator: r.data.illustrator || null
+          };
+          metaCache.set(id, m); meta[id] = m;
+          return;
+        } catch (e) { /* nächste Sprache */ }
+      }
+    });
+    res.json({ meta });
+  } catch (e) {
+    res.status(500).json({ error: 'Karten-Daten konnten nicht geladen werden.' });
   }
 });
 
