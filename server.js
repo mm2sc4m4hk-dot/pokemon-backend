@@ -30,7 +30,7 @@ function rateLimit(max, windowMs = 60 * 1000) {
     next();
   };
 }
-app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices'], rateLimit(120));
+app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices', '/api/wantlist-names'], rateLimit(120));
 app.use('/api/img', rateLimit(600));
 
 // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
@@ -228,6 +228,7 @@ async function getEnglish(card) {
   if (englishCache.has(card.id)) return englishCache.get(card.id);
   const res = await axios.get(`${TCGDEX_BASE}/en/cards/${card.id}`, { timeout: 10000 });
   const en = { name: res.data.name, attacks: (res.data.attacks || []).map(a => a.name).filter(Boolean) };
+  if (englishCache.size > 5000) englishCache.clear();
   englishCache.set(card.id, en);
   return en;
 }
@@ -313,7 +314,10 @@ async function refreshOne(id, force = false) {
       };
     }
   }
-  if (data) priceCache.set(id, { at: Date.now(), date: cardmarket.meta.priceGuideDate || null, data });
+  if (data) {
+    if (priceCache.size > 8000) priceCache.clear();
+    priceCache.set(id, { at: Date.now(), date: cardmarket.meta.priceGuideDate || null, data });
+  }
   return data;
 }
 
@@ -602,6 +606,28 @@ app.get('/api/cards', async (req, res) => {
       return res.status(504).json({ error: 'Zeitüberschreitung bei der Kartendatenbank. Bitte erneut versuchen.' });
     }
     res.status(500).json({ error: 'Fehler beim Abrufen der Karten' });
+  }
+});
+
+// Englische Namen + Set-Namen für den Cardmarket-Wantlist-Export (Cardmarket kennt die englischen Bezeichnungen)
+const wantCache = new Map();
+app.post('/api/wantlist-names', async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(String))].filter((id) => id && !id.startsWith('custom-') && !id.startsWith('cm-')).slice(0, 100);
+    const names = {};
+    await mapLimit(ids, 6, async (id) => {
+      if (wantCache.has(id)) { names[id] = wantCache.get(id); return; }
+      try {
+        const r = await axios.get(`${TCGDEX_BASE}/en/cards/${encodeURIComponent(id)}`, { timeout: 10000 });
+        const v = { name: r.data.name, set: r.data.set?.name || null };
+        if (wantCache.size > 5000) wantCache.clear();
+        wantCache.set(id, v); names[id] = v;
+      } catch (e) { /* Karte überspringen -> Frontend nimmt den gespeicherten Namen */ }
+    });
+    res.json({ names });
+  } catch (e) {
+    res.status(500).json({ error: 'Namen konnten nicht geladen werden.' });
   }
 });
 
