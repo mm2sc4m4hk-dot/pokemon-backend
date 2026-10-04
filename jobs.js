@@ -15,6 +15,7 @@
 //   VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT (mailto:du@example.com)
 const crypto = require('crypto');
 const admin = require('firebase-admin');
+const admin = rawAdmin.default || rawAdmin;
 const webpush = require('web-push');
 
 const KEEP_DAYS = 400;
