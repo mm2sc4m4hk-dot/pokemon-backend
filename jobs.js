@@ -1,6 +1,47 @@
 const crypto = require('crypto');
-const admin = require('firebase-admin');
 const webpush = require('web-push');
+
+// ---------------------------------------------------------------------
+// Firebase Admin SDK universell laden (unterstützt Subpaths & Legacy)
+// ---------------------------------------------------------------------
+function getFirebaseSDK() {
+  let cert, initializeApp, getApps, getFirestore, FieldValue, getAuth;
+
+  try {
+    const appModule = require('firebase-admin/app');
+    initializeApp = appModule.initializeApp;
+    cert = appModule.cert;
+    getApps = appModule.getApps;
+  } catch (e) {}
+
+  try {
+    const fsModule = require('firebase-admin/firestore');
+    getFirestore = fsModule.getFirestore;
+    FieldValue = fsModule.FieldValue;
+  } catch (e) {}
+
+  try {
+    const authModule = require('firebase-admin/auth');
+    getAuth = authModule.getAuth;
+  } catch (e) {}
+
+  // Fallback für ältere CJS-Imports
+  try {
+    const rawAdmin = require('firebase-admin');
+    const admin = rawAdmin.default || rawAdmin;
+
+    if (!initializeApp) initializeApp = admin.initializeApp?.bind(admin);
+    if (!cert) cert = admin.credential?.cert?.bind(admin.credential);
+    if (!getApps) getApps = () => admin.apps;
+    if (!getFirestore) getFirestore = admin.firestore?.bind(admin);
+    if (!FieldValue) FieldValue = admin.firestore?.FieldValue;
+    if (!getAuth) getAuth = admin.auth?.bind(admin);
+  } catch (e) {}
+
+  return { initializeApp, cert, getApps, getFirestore, FieldValue, getAuth };
+}
+
+const { initializeApp, cert, getApps, getFirestore, FieldValue, getAuth } = getFirebaseSDK();
 
 const KEEP_DAYS = 400;
 const PAST_OFFSETS = [1, 7, 30];
@@ -42,11 +83,11 @@ function safeEqual(a, b) {
 }
 
 // ---------------------------------------------------------------------
-// Firebase Admin + Web-Push einrichten
+// Firebase & Web-Push Init
 // ---------------------------------------------------------------------
 function initFirebase() {
-  const firebaseAdmin = admin.default || admin;
-  if (firebaseAdmin.apps?.length) return true;
+  const apps = getApps ? getApps() : [];
+  if (apps && apps.length) return true;
 
   let raw = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!raw) return false;
@@ -55,14 +96,11 @@ function initFirebase() {
     if (!raw.startsWith('{')) raw = Buffer.from(raw, 'base64').toString('utf8');
     const serviceAccount = JSON.parse(raw);
 
-    const cert = (firebaseAdmin.credential?.cert || admin.credential?.cert);
-    if (!cert) throw new Error('credential.cert nicht gefunden');
-
-    if (typeof firebaseAdmin.initializeApp === 'function') {
-      firebaseAdmin.initializeApp({ credential: cert(serviceAccount) });
-    } else {
-      admin.initializeApp({ credential: cert(serviceAccount) });
+    if (!initializeApp || !cert) {
+      throw new Error('Firebase Admin SDK konnte nicht geladen werden.');
     }
+
+    initializeApp({ credential: cert(serviceAccount) });
     return true;
   } catch (e) {
     console.error('FIREBASE_SERVICE_ACCOUNT ungültig:', e.message);
@@ -152,8 +190,6 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
   }
 
   async function sendTargetAlerts(db, watchEntries, freshById) {
-    const firebaseAdmin = admin.default || admin;
-    const FieldValue = firebaseAdmin.firestore.FieldValue;
     const byUser = new Map();
     const resets = [];
     for (const w of watchEntries) {
@@ -191,7 +227,9 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
         }).catch(() => {})));
       }
     }
-    await Promise.all(resets.map((ref) => ref.update({ alertedTarget: FieldValue.delete() }).catch(() => {})));
+    if (FieldValue?.delete) {
+      await Promise.all(resets.map((ref) => ref.update({ alertedTarget: FieldValue.delete() }).catch(() => {})));
+    }
     return { notifiedUsers, notifiedCards };
   }
 
@@ -200,8 +238,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     if (running) return { skipped: 'läuft bereits' };
     running = true; last.startedAt = new Date().toISOString(); last.error = null;
     try {
-      const firebaseAdmin = admin.default || admin;
-      const db = firebaseAdmin.firestore();
+      const db = getFirestore();
       await cardmarket.refresh();
       const day = String(cardmarket.meta.priceGuideDate || '').slice(0, 10) || todayUtc();
 
@@ -276,10 +313,11 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     app.post('/api/push/test', async (req, res) => {
       if (!pushReady) return res.status(503).json({ error: 'Push ist auf dem Server nicht eingerichtet.' });
       try {
-        const firebaseAdmin = admin.default || admin;
         const token = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-        const decoded = await firebaseAdmin.auth().verifyIdToken(token);
-        const r = await sendToUser(firebaseAdmin.firestore(), decoded.uid, {
+        const auth = getAuth();
+        const decoded = await auth.verifyIdToken(token);
+        const db = getFirestore();
+        const r = await sendToUser(db, decoded.uid, {
           title: '🔔 Push funktioniert', body: 'So meldet dich PokéTracker, wenn ein Zielpreis erreicht ist.', url: '/?tab=watchlist', tag: 'push-test'
         });
         if (r.subs === 0) return res.status(404).json({ error: 'Für dieses Konto ist kein Gerät registriert.' });
