@@ -1,21 +1,5 @@
-// Täglicher Server-Job für PokéTracker:
-//   1. Cardmarket-Dateien neu laden
-//   2. alle getrackten Karten sammeln (Collection + Watchlist + Binder aller Nutzer)
-//   3. aktuelle Preise holen und in Firestore ablegen:
-//        cardPrices/{kartenId}   -> aktueller Preis + Vergleichswerte (vor 1/7/30 Tagen), klein & schnell
-//        cardHistory/{kartenId}  -> Verlauf { days: { "2026-10-04": [trend, holoTrend] } }
-//   4. Web-Push an alle Nutzer, deren Watchlist-Karte den Zielpreis erreicht hat
-//
-// Ausgelöst wird der Job von außen (GitHub Actions / cron-job.org), weil der
-// Render-Gratisplan schläft: POST /api/cron/daily  mit Header  x-cron-secret.
-//
-// Umgebungsvariablen (Render -> Environment):
-//   FIREBASE_SERVICE_ACCOUNT  Inhalt der Service-Account-JSON (oder base64 davon)
-//   CRON_SECRET               beliebiges langes Geheimnis
-//   VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT (mailto:du@example.com)
 const crypto = require('crypto');
-const rawAdmin = require('firebase-admin');
-const admin = rawAdmin.default || rawAdmin;
+const admin = require('firebase-admin');
 const webpush = require('web-push');
 
 const KEEP_DAYS = 400;
@@ -26,7 +10,6 @@ const PAST_OFFSETS = [1, 7, 30];
 // ---------------------------------------------------------------------
 const trendOf = (p = {}) => p.trendPrice || p.averageSellPrice || 0;
 const holoOf = (p = {}) => p.trendPriceHolo || p.avg1Holo || 0;
-// gleiche Regel wie watchPrice() in der App (Zielpreis-Alarm)
 const watchPrice = (p = {}) => trendOf(p) || holoOf(p);
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
@@ -39,8 +22,6 @@ function dateMinus(key, n) {
   return d.toISOString().slice(0, 10);
 }
 
-// Wert, der n Tage vor `dayKey` galt: letzter gespeicherter Tag <= Zieldatum
-// (höchstens 4 Tage älter, sonst gibt es noch keinen sinnvollen Vergleichswert).
 function pastValue(days, dayKey, n) {
   const target = dateMinus(dayKey, n);
   const floor = dateMinus(target, 4);
@@ -61,17 +42,27 @@ function safeEqual(a, b) {
 }
 
 // ---------------------------------------------------------------------
-// Firebase Admin + Web-Push einrichten (beides optional: fehlt die
-// Konfiguration, läuft der Rest des Servers ganz normal weiter)
+// Firebase Admin + Web-Push einrichten
 // ---------------------------------------------------------------------
 function initFirebase() {
-  if (admin.apps?.length) return true;
+  const firebaseAdmin = admin.default || admin;
+  if (firebaseAdmin.apps?.length) return true;
+
   let raw = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!raw) return false;
   try {
     raw = raw.trim();
     if (!raw.startsWith('{')) raw = Buffer.from(raw, 'base64').toString('utf8');
-    admin.initializeApp({ credential: admin.credential.cert(JSON.parse(raw)) });
+    const serviceAccount = JSON.parse(raw);
+
+    const cert = (firebaseAdmin.credential?.cert || admin.credential?.cert);
+    if (!cert) throw new Error('credential.cert nicht gefunden');
+
+    if (typeof firebaseAdmin.initializeApp === 'function') {
+      firebaseAdmin.initializeApp({ credential: cert(serviceAccount) });
+    } else {
+      admin.initializeApp({ credential: cert(serviceAccount) });
+    }
     return true;
   } catch (e) {
     console.error('FIREBASE_SERVICE_ACCOUNT ungültig:', e.message);
@@ -100,7 +91,6 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
   let running = false;
   const last = { startedAt: null, finishedAt: null, result: null, error: null };
 
-  // ---- Alle Karten sammeln, die irgendjemand trackt ----
   async function gather(db) {
     const [coll, watch, binders] = await Promise.all([
       db.collectionGroup('collection').select('id').get(),
@@ -131,8 +121,6 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     return out;
   }
 
-  // Frischer Preis: erst direkt über die gemerkte Cardmarket-Produkt-ID (kein TCGdex-Aufruf nötig),
-  // sonst über den normalen Abgleich.
   async function resolveFresh(id, known) {
     const pid = (known && known.productId) || (id.startsWith('cm-') ? Number(id.slice(3)) : null);
     if (pid) {
@@ -142,7 +130,6 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     return refreshOne(id, true);
   }
 
-  // ---- Web-Push ----
   async function sendToUser(db, uid, payload) {
     const subsSnap = await db.collection('users').doc(uid).collection('pushSubs').get();
     let sent = 0; let failed = 0;
@@ -157,7 +144,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
         sent += 1;
       } catch (e) {
         failed += 1;
-        if (e.statusCode === 404 || e.statusCode === 410) await d.ref.delete().catch(() => {}); // Abo ist abgelaufen
+        if (e.statusCode === 404 || e.statusCode === 410) await d.ref.delete().catch(() => {});
         else console.error('Push fehlgeschlagen:', e.statusCode || e.message);
       }
     }));
@@ -165,7 +152,8 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
   }
 
   async function sendTargetAlerts(db, watchEntries, freshById) {
-    const FieldValue = admin.firestore.FieldValue;
+    const firebaseAdmin = admin.default || admin;
+    const FieldValue = firebaseAdmin.firestore.FieldValue;
     const byUser = new Map();
     const resets = [];
     for (const w of watchEntries) {
@@ -174,13 +162,12 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
       const cur = watchPrice(fresh ? fresh.prices : (w.data.cardmarket && w.data.cardmarket.prices));
       if (!(target > 0) || !(cur > 0)) continue;
       if (cur <= target) {
-        // neu erreicht (oder Zielpreis wurde geändert) -> melden; sonst wurde schon gemeldet
         if (w.data.alertedTarget !== target) {
           if (!byUser.has(w.uid)) byUser.set(w.uid, []);
           byUser.get(w.uid).push({ w, name: plain(w.data.name), cur, target });
         }
       } else if (w.data.alertedTarget != null) {
-        resets.push(w.ref); // wieder über dem Ziel -> beim nächsten Erreichen erneut benachrichtigen
+        resets.push(w.ref);
       }
     }
 
@@ -197,7 +184,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
         tag: 'target-price'
       };
       const res = await sendToUser(db, uid, payload);
-      if (res.sent > 0) { // nur als „gemeldet“ markieren, wenn wirklich etwas zugestellt wurde
+      if (res.sent > 0) {
         notifiedUsers += 1; notifiedCards += hits.length;
         await Promise.all(hits.map((h) => h.w.ref.update({
           alertedTarget: h.target, alertedAt: Date.now(), alertedPrice: h.cur
@@ -208,14 +195,14 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
     return { notifiedUsers, notifiedCards };
   }
 
-  // ---- Der eigentliche Job ----
   async function runDaily() {
     if (!firebaseReady) throw new Error('FIREBASE_SERVICE_ACCOUNT fehlt');
     if (running) return { skipped: 'läuft bereits' };
     running = true; last.startedAt = new Date().toISOString(); last.error = null;
     try {
-      const db = admin.firestore();
-      await cardmarket.refresh(); // Tagesdateien neu laden
+      const firebaseAdmin = admin.default || admin;
+      const db = firebaseAdmin.firestore();
+      await cardmarket.refresh();
       const day = String(cardmarket.meta.priceGuideDate || '').slice(0, 10) || todayUtc();
 
       const { ids, watchEntries } = await gather(db);
@@ -228,7 +215,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
         try {
           const f = await resolveFresh(id, priceDocs.get(id));
           if (f && f.prices && (trendOf(f.prices) || holoOf(f.prices))) freshById.set(id, f);
-        } catch (e) { /* einzelne Karte überspringen */ }
+        } catch (e) { }
       });
 
       const writer = db.bulkWriter();
@@ -268,7 +255,6 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
   }
 
   function registerRoutes(app) {
-    // Wird von GitHub Actions / cron-job.org aufgerufen (weckt den Gratis-Server auch auf)
     app.post('/api/cron/daily', async (req, res) => {
       const secret = process.env.CRON_SECRET;
       if (!secret || !safeEqual(req.get('x-cron-secret'), secret)) return res.status(401).json({ error: 'unauthorized' });
@@ -287,13 +273,13 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
       res.json({ firebaseReady, pushReady, running, ...last });
     });
 
-    // Test-Push an die eigenen Geräte (Nutzer weist sich mit seinem Firebase-ID-Token aus)
     app.post('/api/push/test', async (req, res) => {
-      if (!pushReady) return res.status(503).json({ error: 'Push ist auf dem Server nicht eingerichtet (VAPID-Schlüssel / Service-Account fehlen).' });
+      if (!pushReady) return res.status(503).json({ error: 'Push ist auf dem Server nicht eingerichtet.' });
       try {
+        const firebaseAdmin = admin.default || admin;
         const token = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-        const decoded = await admin.auth().verifyIdToken(token);
-        const r = await sendToUser(admin.firestore(), decoded.uid, {
+        const decoded = await firebaseAdmin.auth().verifyIdToken(token);
+        const r = await sendToUser(firebaseAdmin.firestore(), decoded.uid, {
           title: '🔔 Push funktioniert', body: 'So meldet dich PokéTracker, wenn ein Zielpreis erreicht ist.', url: '/?tab=watchlist', tag: 'push-test'
         });
         if (r.subs === 0) return res.status(404).json({ error: 'Für dieses Konto ist kein Gerät registriert.' });
