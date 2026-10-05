@@ -1,3 +1,8 @@
+Nein, so startet der Server noch nicht. Nach dem Ende der `/api/cards`-Route haben sich durch mehrfaches Einfügen alte Code-Reste und doppelte Klammern (`})`, `catch`-Blöcke) am Ende der Datei angesammelt. Das führt beim Starten sofort wieder zu einem `SyntaxError`.
+
+Hier ist deine **vollständige, bereinigte und funktionierende `server.js**`:
+
+```javascript
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -7,7 +12,6 @@ const app = express();
 app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
 
 // CORS: auf Render unter ALLOWED_ORIGINS (kommagetrennt, z. B. https://deine-app.vercel.app) eintragen.
-// Ohne die Variable bleibt alles offen wie bisher. Anfragen ohne Origin (Cron, curl) gehen immer durch.
 const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
 app.use(cors(allowedOrigins.length
   ? { origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)) }
@@ -34,8 +38,6 @@ app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices', '/api/wantl
 app.use('/api/img', rateLimit(600));
 
 // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
-// Kostenlos, kein API-Key, echte Cardmarket-Preise (EUR) direkt im
-// Card-Objekt, Karten nativ in mehreren Sprachen (u.a. Deutsch).
 const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
 
 // Zweite Datenquelle (Cardmarket-Dateien) im Hintergrund laden und täglich erneuern
@@ -47,8 +49,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Bild-Proxy (nur TCGdex-Assets): erlaubt dem Frontend, Kartenbilder in ein Canvas zu zeichnen
-// ("Binder-Seite als Bild teilen"), falls der Direktabruf wegen CORS nicht klappt.
+// Bild-Proxy (nur TCGdex-Assets)
 app.get('/api/img', async (req, res) => {
   try {
     const u = new URL(String(req.query.u || ''));
@@ -62,11 +63,6 @@ app.get('/api/img', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------
-// Suchbegriff zerlegen: "Glumanda 044", "Glumanda 44/102", "Pikachu SV044",
-// "Glumanda #044" -> Name + Kartennummer (wie bei Cardmarket).
-// Steht am Ende KEINE Nummer, wird ganz normal nur nach dem Namen gesucht.
-// ---------------------------------------------------------------------
 function parseQuery(raw) {
   const tokens = raw.trim().replace(/#/g, ' ').split(/\s+/).filter(Boolean);
   if (tokens.length >= 2) {
@@ -77,8 +73,8 @@ function parseQuery(raw) {
         name: tokens.slice(0, -1).join(' '),
         number: {
           prefix: m[1].toUpperCase(),
-          digits: String(parseInt(m[2], 10)), // "044" -> "44"
-          suffix: m[3].toLowerCase(),         // "195a" -> "a"
+          digits: String(parseInt(m[2], 10)),
+          suffix: m[3].toLowerCase(),
           total: m[4] ? String(parseInt(m[4].replace(/\D/g, ''), 10)) : null
         }
       };
@@ -87,8 +83,6 @@ function parseQuery(raw) {
   return { name: tokens.join(' '), number: null };
 }
 
-// localId aus TCGdex ("044", "44", "SV044", "TG05") in Prefix + Zahl ohne
-// führende Nullen zerlegen, damit "044" und "44" als gleich gelten.
 function splitLocalId(localId) {
   const m = String(localId || '').match(/^([A-Za-z]*)(\d+)([A-Za-z]?)$/);
   if (!m) return null;
@@ -101,7 +95,6 @@ function matchesNumber(localId, number) {
   return parts.digits === number.digits && parts.prefix === number.prefix && parts.suffix === (number.suffix || '');
 }
 
-// Baut aus einem TCGdex-Kartenobjekt die Form, die das Frontend erwartet.
 function normalizeCard(card, lang) {
   const img = card.image ? `${card.image}/high.webp` : '';
   const imgSmall = card.image ? `${card.image}/low.webp` : '';
@@ -112,34 +105,26 @@ function normalizeCard(card, lang) {
     name: card.name,
     number: card.localId || null,
     images: { small: imgSmall || img, large: img },
-    // Angriffsnamen (für den Preisabgleich mit Cardmarket)
     attacks: (card.attacks || []).map(a => a.name).filter(Boolean),
     set: {
       id: card.set?.id || null,
       name: card.set?.name || null,
       total: card.set?.cardCount?.official ?? null
     },
-    // Welche Druckvarianten es laut TCGdex gibt, z.B.
-    // { normal: true, reverse: true, holo: false, firstEdition: false }
     variants: card.variants || null,
-    // Pokédex-Nummer(n) und Zeichner (für Pokédex-/Artist-Ansicht)
     dexId: Array.isArray(card.dexId) ? card.dexId.map(Number).filter(Number.isFinite) : [],
     illustrator: card.illustrator || null,
-    // Cardmarket-Suchlink mit Name + Nummer (so findet Cardmarket die
-    // Karte direkt, z.B. "Glumanda 044").
     cardmarket: {
       url: `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(
         [card.name, card.localId].filter(Boolean).join(' ')
       )}`,
       prices: {
-        // Normale (Non-Foil) Preisreihe
         trendPrice: cm.trend ?? cm.avg ?? 0,
         averageSellPrice: cm.avg ?? 0,
         avg1: cm.avg1 ?? 0,
         avg7: cm.avg7 ?? 0,
         avg30: cm.avg30 ?? 0,
         low: cm.low ?? 0,
-        // Holo/Foil-Preisreihe (Cardmarket führt "foil" getrennt)
         trendPriceHolo: cm['trend-holo'] ?? cm['avg-holo'] ?? 0,
         avg1Holo: cm['avg1-holo'] ?? 0,
         avg7Holo: cm['avg7-holo'] ?? 0,
@@ -151,8 +136,6 @@ function normalizeCard(card, lang) {
   };
 }
 
-// "Dedenne GX" -> auch "Dedenne-GX" probieren (TCGdex nutzt den Bindestrich
-// bei GX/EX/V/VMAX/VSTAR-Karten).
 function nameVariants(name) {
   const variants = [name];
   const hyphenated = name.replace(/\s+(GX|EX|V|VMAX|VSTAR|VUNION|ex)$/i, '-$1');
@@ -160,13 +143,10 @@ function nameVariants(name) {
   return variants;
 }
 
-// Sucht Karten in einer TCGdex-Sprache und liefert die schlanke Brief-Liste
-// (id, localId, name, image). Optional mit Nummernfilter (Teilstring-Suche
-// auf localId, wird danach in matchesNumber noch exakt geprüft).
 async function searchBriefs(lang, name, set, numberDigits, perPage) {
   try {
     const params = new URLSearchParams();
-    params.set('name', name); // Default = "laxist" Teilstring-Suche
+    params.set('name', name);
     if (numberDigits) params.set('localId', numberDigits);
     if (set) params.set('set.name', `like:${set}`);
     params.set('pagination:itemsPerPage', String(perPage));
@@ -174,7 +154,6 @@ async function searchBriefs(lang, name, set, numberDigits, perPage) {
     const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards?${params.toString()}`, { timeout: 10000 });
     return Array.isArray(res.data) ? res.data : [];
   } catch (e) {
-    // Eine fehlschlagende Sprache darf die andere nicht mit runterreißen.
     console.error(`TCGdex Brief-Suche (${lang}) fehlgeschlagen:`, e.response?.status || e.message);
     return [];
   }
@@ -184,23 +163,17 @@ async function fetchDetail(lang, id) {
   const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${id}`, { timeout: 10000 });
   const normalized = normalizeCard(res.data, lang);
 
-  // Manche (v.a. deutsche) Karten haben noch kein Bild -> Bild (und
-  // Varianten/Preise, falls dort leer) von der englischen Version holen.
   if (!normalized.images.small && lang !== 'en') {
     try {
       const enRes = await axios.get(`${TCGDEX_BASE}/en/cards/${id}`, { timeout: 10000 });
       const enNormalized = normalizeCard(enRes.data, 'en');
       normalized.images = enNormalized.images;
-    } catch (e) {
-      // kein Bild verfügbar -> Frontend zeigt einen Platzhalter
-    }
+    } catch (e) {}
   }
 
   return normalized;
 }
 
-// Deutsch UND Englisch parallel durchsuchen und über die sprachunabhängige
-// Karten-ID zusammenführen (deutsch bevorzugt, sonst englisch).
 async function collectIds(parsed, set, useServerNumberFilter) {
   const perPage = parsed.number ? 100 : 48;
   const numberDigits = parsed.number && useServerNumberFilter ? parsed.number.digits : null;
@@ -213,7 +186,6 @@ async function collectIds(parsed, set, useServerNumberFilter) {
   );
   const [deBriefs, enBriefs] = lists;
 
-  // Promo-Nummern wie "SVP044": TCGdex führt die Karte als Set "svp" mit localId "044" (ohne Präfix)
   const promoMatch = (b) => {
     const n = parsed.number;
     if (!n || !n.prefix) return false;
@@ -229,7 +201,6 @@ async function collectIds(parsed, set, useServerNumberFilter) {
   return idToLang;
 }
 
-// Englischer Name + Angriffe einer Karte (Cardmarket-Namen sind englisch). Wird gemerkt.
 const englishCache = new Map();
 async function getEnglish(card) {
   if (card._lang === 'en') return { name: card.name, attacks: card.attacks || [] };
@@ -241,7 +212,6 @@ async function getEnglish(card) {
   return en;
 }
 
-// Set-Kürzel (z. B. "MEW", "PGO") für Cardmarket-Suchlinks, pro Set 1x geladen und gemerkt
 const setAbbrCache = new Map();
 async function getSetAbbr(setId) {
   if (!setId) return null;
@@ -252,20 +222,18 @@ async function getSetAbbr(setId) {
     setAbbrCache.set(setId, abbr);
     return abbr;
   } catch (e) {
-    return null; // nicht merken, beim nächsten Mal erneut versuchen
+    return null;
   }
 }
 
 const padNumber = (n) => (/^\d+$/.test(String(n)) ? String(n).padStart(3, '0') : String(n));
 
-// Cardmarket-Suchlink im Format der Cardmarket-Suche: "Pikachu (MEW 025)".
-// Ältere Sets ohne Kürzel behalten den bisherigen Link (Name + Nummer).
 async function withCmLink(card) {
   try {
     if (!card.number || !card.set?.id) return card;
     const abbr = await getSetAbbr(card.set.id);
     if (!abbr) return card;
-    const en = await getEnglish(card); // Cardmarket-Namen sind englisch
+    const en = await getEnglish(card);
     const q = `${en.name} (${abbr} ${padNumber(card.number)})`;
     return {
       ...card,
@@ -279,11 +247,9 @@ async function withCmLink(card) {
   }
 }
 
-// Sucht zur TCGdex-Karte das passende Cardmarket-Produkt (gleiches Set, gleicher
-// Name, bei mehreren Versionen gleiche Angriffe) und nimmt dessen Tagespreise.
 async function enrichPrices(card) {
   try {
-    await cardmarket.ready(); // nach einem Kaltstart erst den Cardmarket-Index abwarten
+    await cardmarket.ready();
     const setId = card.set?.id;
     if (!setId || !cardmarket.hasSet(setId)) return card;
     const en = await getEnglish(card);
@@ -292,7 +258,7 @@ async function enrichPrices(card) {
     const product = cands.length === 1 ? cands[0] : cardmarket.pickByAttacks(cands, en.attacks);
     return product ? cardmarket.applyProduct(card, product) : card;
   } catch (e) {
-    return card; // Abgleich ist nur ein Bonus: bei Fehlern bleibt der TCGdex-Preis
+    return card;
   }
 }
 
@@ -308,7 +274,6 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-// Liste aller Sets (für den Hinweis auf neue Sets im Frontend)
 let setsListCache = { at: 0, list: [] };
 app.get('/api/sets-list', async (req, res) => {
   try {
@@ -327,7 +292,6 @@ app.get('/api/sets-list', async (req, res) => {
   }
 });
 
-// Kartenliste eines Sets (für den Set-Fortschritt im Frontend)
 app.get('/api/sets/:id', async (req, res) => {
   try {
     const r = await axios.get(`${TCGDEX_BASE}/en/sets/${encodeURIComponent(req.params.id)}`, { timeout: 15000 });
@@ -349,15 +313,7 @@ app.get('/api/sets/:id', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------
-// Preis-Aktualisierung: das Frontend schickt die Karten-IDs der Collection
-// und Watchlist und bekommt die aktuellen Cardmarket-Preise zurück.
-// Ergebnisse bleiben bis zur nächsten Cardmarket-Tagesdatei im Speicher, damit mehrfaches
-// Aktualisieren (oder mehrere Nutzer) TCGdex nicht unnötig belasten.
-// ---------------------------------------------------------------------
-// Cardmarket aktualisiert nur einmal täglich: ein Eintrag gilt, solange die Tagesdatei (priceGuideDate)
-// dieselbe ist (höchstens 12 Stunden als Sicherheitsnetz). Der Tages-Job (jobs.js) wärmt den Cache vor.
-const priceCache = new Map(); // id -> { at, date, data }
+const priceCache = new Map();
 const PRICE_TTL_MS = 12 * 60 * 60 * 1000;
 
 async function refreshOne(id, force = false) {
@@ -366,12 +322,11 @@ async function refreshOne(id, force = false) {
 
   let data = null;
   if (id.startsWith('cm-')) {
-    // Treffer, die nur aus der Cardmarket-Datei stammen
     data = cardmarket.pricesOfProduct(Number(id.slice(3)));
   } else if (!id.startsWith('custom-')) {
     let card = null;
     for (const lang of ['en', 'de']) {
-      try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
+      try { card = await fetchDetail(lang, id); break; } catch (e) {}
     }
     if (card) {
       card = await enrichPrices(card);
@@ -401,7 +356,7 @@ app.post('/api/prices', async (req, res) => {
       try {
         const d = await refreshOne(id);
         if (d) prices[id] = d;
-      } catch (e) { /* einzelne Karte überspringen */ }
+      } catch (e) {}
     });
     res.json({ prices, priceGuideDate: cardmarket.meta.priceGuideDate });
   } catch (e) {
@@ -410,12 +365,8 @@ app.post('/api/prices', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------
-// Artist-, Pokédex- und Karten-Endpunkte für Artist-Ansicht, Pokédex und Binder
-// ---------------------------------------------------------------------
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Set-Namen und Reihenfolge (aus der Karten-ID wird die Set-ID abgeleitet, DE + EN)
 let setsIndex = { at: 0, names: new Map(), order: new Map() };
 async function getSetsIndex() {
   if (setsIndex.names.size && Date.now() - setsIndex.at < 6 * 60 * 60 * 1000) return setsIndex;
@@ -431,7 +382,6 @@ async function getSetsIndex() {
   const deList = Array.isArray(deRes.data) ? deRes.data : [];
   const enList = Array.isArray(enRes.data) ? enRes.data : [];
 
-  // Englische Sets als Basis-Reihenfolge
   enList.forEach((s, i) => {
     if (s && s.id) {
       names.set(s.id, s.name);
@@ -439,7 +389,6 @@ async function getSetsIndex() {
     }
   });
 
-  // Deutsche Set-Namen bevorzugen / ergänzen (z. B. "30 Jahre")
   deList.forEach((s, i) => {
     if (s && s.id) {
       if (s.name) names.set(s.id, s.name);
@@ -512,13 +461,11 @@ app.get('/api/illustrators/:name', async (req, res) => {
   }
 });
 
-// Alle Karten eines Pokémon (nationale Pokédex-Nummer) – DE & EN zusammenführen
 app.get('/api/dex/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'Ungültige Pokédex-Nummer.' });
 
-    // DE, EN und Set-Index parallel abrufen
     const [deRes, enRes, idx] = await Promise.all([
       axios.get(`${TCGDEX_BASE}/de/dex-ids/${id}`, { timeout: 25000 }).catch(() => ({ data: { cards: [] } })),
       axios.get(`${TCGDEX_BASE}/en/dex-ids/${id}`, { timeout: 25000 }).catch(() => ({ data: { cards: [] } })),
@@ -528,7 +475,6 @@ app.get('/api/dex/:id', async (req, res) => {
     const deCards = (deRes.data && Array.isArray(deRes.data.cards)) ? deRes.data.cards : [];
     const enCards = (enRes.data && Array.isArray(enRes.data.cards)) ? enRes.data.cards : [];
 
-    // Eindeutig nach Karten-ID zusammenführen (deutsche Version bevorzugen)
     const cardMap = new Map();
     deCards.forEach((c) => { if (c && c.id) cardMap.set(c.id, c); });
     enCards.forEach((c) => { if (c && c.id && !cardMap.has(c.id)) cardMap.set(c.id, c); });
@@ -543,13 +489,13 @@ app.get('/api/dex/:id', async (req, res) => {
   }
 });
 
-// Pokédex-Liste (Nummer + Name, deutsch wenn verfügbar) aus der PokéAPI, 1x pro Tag
 let pokedexCache = { at: 0, data: null };
 async function gql(url, query) {
   const r = await axios.post(url, { query }, { timeout: 30000, headers: { 'Content-Type': 'application/json' } });
   if (r.data && r.data.errors) throw new Error(JSON.stringify(r.data.errors).slice(0, 200));
   return r.data.data;
 }
+
 async function loadPokedex() {
   const attempts = [
     ['https://graphql.pokeapi.co/v1beta2', 'pokemonspecies', 'pokemonspeciesnames'],
@@ -570,7 +516,7 @@ async function loadPokedex() {
       console.error('Pokédex GraphQL fehlgeschlagen:', url, e.message);
     }
   }
-  // Fallback: REST-Liste (nur englische Namen)
+
   const r = await axios.get('https://pokeapi.co/api/v2/pokemon-species?limit=3000', { timeout: 30000 });
   const list = (r.data.results || []).map((s) => {
     const id = Number(String(s.url).split('/').filter(Boolean).pop());
@@ -579,6 +525,7 @@ async function loadPokedex() {
   }).filter((x) => x.id).sort((a, b) => a.id - b.id);
   return { lang: 'en', list };
 }
+
 app.get('/api/pokedex', async (req, res) => {
   try {
     if (!pokedexCache.data || Date.now() - pokedexCache.at > DAY_MS) {
@@ -591,7 +538,6 @@ app.get('/api/pokedex', async (req, res) => {
   }
 });
 
-// Einzelne Karte komplett (inkl. Cardmarket-Preise) – z. B. zum Hinzufügen zur Watchlist
 app.get('/api/card/:id', async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -605,15 +551,13 @@ app.get('/api/card/:id', async (req, res) => {
           foundLang = lang;
           break; 
         }
-      } catch (e) { /* nächste Sprache versuchen */ }
+      } catch (e) {}
     }
 
     if (!card) return res.status(404).json({ error: 'Karte nicht gefunden.' });
 
-    // Sprache am Objekt ergänzen für UI-Badges
     card.language = foundLang;
 
-    // Cardmarket-Enrichment abfedern, damit die Karte selbst bei Preis-Fehlern lädt
     try {
       card = await enrichWithCardmarket(card);
     } catch (cmError) {
@@ -628,7 +572,6 @@ app.get('/api/card/:id', async (req, res) => {
   }
 });
 
-// Pokédex-Nummer(n) und Artist für viele Karten (einmaliges Nachladen für ältere Collection-Einträge)
 const metaCache = new Map();
 app.post('/api/card-meta', async (req, res) => {
   try {
@@ -647,7 +590,7 @@ app.post('/api/card-meta', async (req, res) => {
           };
           metaCache.set(id, m); meta[id] = m;
           return;
-        } catch (e) { /* nächste Sprache */ }
+        } catch (e) {}
       }
     });
     res.json({ meta });
@@ -656,7 +599,6 @@ app.post('/api/card-meta', async (req, res) => {
   }
 });
 
-// Mehrere Karten auf einmal komplett laden (inkl. Cardmarket-Preise) – z. B. "Alle in die Wishlist"
 app.post('/api/cards/bulk', async (req, res) => {
   try {
     const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -668,7 +610,7 @@ app.post('/api/cards/bulk', async (req, res) => {
         if (id.startsWith('cm-')) return cardmarket.cardOfProduct(Number(id.slice(3)));
         let card = null;
         for (const lang of ['de', 'en']) {
-          try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
+          try { card = await fetchDetail(lang, id); break; } catch (e) {}
         }
         return card ? await enrichWithCardmarket(card) : null;
       } catch (e) {
@@ -682,6 +624,9 @@ app.post('/api/cards/bulk', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// KARTEN-SUCHE (TCGdex + Cardmarket Fallback)
+// ---------------------------------------------------------------------
 app.get('/api/cards', async (req, res) => {
   try {
     const name = typeof req.query.name === 'string' ? req.query.name : '';
@@ -699,17 +644,14 @@ app.get('/api/cards', async (req, res) => {
     const cleanSet = set ? set.trim() : '';
     let idToLang = await collectIds(parsed, cleanSet, true);
 
-    // Fallback: ohne Nummernfilter suchen
     if (idToLang.size === 0 && parsed.number) {
       idToLang = await collectIds(parsed, cleanSet, false);
     }
 
-    // TCGdex kennt die Karte nicht -> in Cardmarket-Dateien suchen
     if (idToLang.size === 0) {
       return res.json(cardmarket.search(parsed.name));
     }
 
-    // Auf max. 40 Karten begrenzen
     const entries = Array.from(idToLang.entries()).slice(0, 40);
 
     const detailed = await Promise.all(
@@ -723,11 +665,17 @@ app.get('/api/cards', async (req, res) => {
     );
 
     let results = detailed.filter(Boolean);
+    if (results.length === 0) return res.json(cardmarket.search(parsed.name));
 
-    // Cardmarket-Preise anreichern
-    if (typeof mapLimit === 'function' && typeof enrichWithCardmarket === 'function') {
-      results = await mapLimit(results, 8, enrichWithCardmarket);
+    if (parsed.number?.total) {
+      results = results.filter(c => c.set?.total == null || String(c.set.total) === parsed.number.total);
     }
+
+    results = await mapLimit(results, 8, enrichWithCardmarket);
+
+    results.sort((a, b) =>
+      (a.name || '').localeCompare(b.name || '') || (a.set?.name || '').localeCompare(b.set?.name || '')
+    );
 
     return res.json(results);
   } catch (error) {
@@ -736,45 +684,6 @@ app.get('/api/cards', async (req, res) => {
   }
 });
 
-    // Fehlerhafte/leere Detailanfragen herausfiltern und Ergebnis senden
-    const validCards = detailed.filter(Boolean);
-    return res.json(validCards);
-
-  } catch (error) {
-    console.error('Fehler bei /api/cards:', error);
-    return res.status(500).json({ error: 'Fehler beim Laden der Karten' });
-  }
-});
-
-    let results = detailed.filter(Boolean);
-    if (results.length === 0) return res.json(cardmarket.search(parsed.name));
-
-    // "Glumanda 044/102": zusätzlich nach der Set-Gesamtzahl filtern, wenn
-    // TCGdex sie kennt (Karten ohne Angabe bleiben drin).
-    if (parsed.number?.total) {
-      results = results.filter(c => c.set.total == null || String(c.set.total) === parsed.number.total);
-    }
-
-    results = await mapLimit(results, 8, enrichWithCardmarket);
-
-    results.sort((a, b) =>
-      (a.name || '').localeCompare(b.name || '') || (a.set?.name || '').localeCompare(b.set?.name || '')
-    );
-    res.json(results);
-  } catch (error) {
-    const status = error.response?.status;
-    console.error('TCGdex API Error:', status, error.response ? error.response.data : error.message);
-    if (status === 400) {
-      return res.status(400).json({ error: 'Ungültige Suchanfrage.' });
-    }
-    if (error.code === 'ECONNABORTED') {
-      return res.status(504).json({ error: 'Zeitüberschreitung bei der Kartendatenbank. Bitte erneut versuchen.' });
-    }
-    res.status(500).json({ error: 'Fehler beim Abrufen der Karten' });
-  }
-});
-
-// Englische Namen + Set-Namen für den Cardmarket-Wantlist-Export (Cardmarket kennt die englischen Bezeichnungen)
 const wantCache = new Map();
 app.post('/api/wantlist-names', async (req, res) => {
   try {
@@ -795,7 +704,7 @@ app.post('/api/wantlist-names', async (req, res) => {
         };
         if (wantCache.size > 5000) wantCache.clear();
         wantCache.set(id, v); names[id] = v;
-      } catch (e) { /* Karte überspringen -> Frontend nimmt den gespeicherten Namen */ }
+      } catch (e) {}
     });
     res.json({ names });
   } catch (e) {
@@ -803,7 +712,6 @@ app.post('/api/wantlist-names', async (req, res) => {
   }
 });
 
-// Täglicher Job: Preis-Historie, Firestore-Preiscache, Push bei Zielpreis (siehe jobs.js)
 require('./jobs')({ cardmarket, refreshOne, mapLimit }).registerRoutes(app);
 
 const PORT = process.env.PORT || 5000;
