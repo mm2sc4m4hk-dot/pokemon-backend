@@ -724,6 +724,20 @@ app.get('/api/cards', async (req, res) => {
       })
     );
 
+    let results = detailed.filter(Boolean);
+
+    // Cardmarket-Preise anreichern
+    if (typeof mapLimit === 'function' && typeof enrichWithCardmarket === 'function') {
+      results = await mapLimit(results, 8, enrichWithCardmarket);
+    }
+
+    return res.json(results);
+  } catch (error) {
+    console.error('Fehler bei /api/cards:', error);
+    return res.status(500).json({ error: 'Fehler beim Laden der Karten' });
+  }
+});
+
     // Fehlerhafte/leere Detailanfragen herausfiltern und Ergebnis senden
     const validCards = detailed.filter(Boolean);
     return res.json(validCards);
