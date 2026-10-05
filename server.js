@@ -241,9 +241,47 @@ async function getEnglish(card) {
   return en;
 }
 
+// Set-Kürzel (z. B. "MEW", "PGO") für Cardmarket-Suchlinks, pro Set 1x geladen und gemerkt
+const setAbbrCache = new Map();
+async function getSetAbbr(setId) {
+  if (!setId) return null;
+  if (setAbbrCache.has(setId)) return setAbbrCache.get(setId);
+  try {
+    const r = await axios.get(`${TCGDEX_BASE}/en/sets/${encodeURIComponent(setId)}`, { timeout: 10000 });
+    const abbr = r.data?.abbreviation?.official || null;
+    setAbbrCache.set(setId, abbr);
+    return abbr;
+  } catch (e) {
+    return null; // nicht merken, beim nächsten Mal erneut versuchen
+  }
+}
+
+const padNumber = (n) => (/^\d+$/.test(String(n)) ? String(n).padStart(3, '0') : String(n));
+
+// Cardmarket-Suchlink im Format der Cardmarket-Suche: "Pikachu (MEW 025)".
+// Ältere Sets ohne Kürzel behalten den bisherigen Link (Name + Nummer).
+async function withCmLink(card) {
+  try {
+    if (!card.number || !card.set?.id) return card;
+    const abbr = await getSetAbbr(card.set.id);
+    if (!abbr) return card;
+    const en = await getEnglish(card); // Cardmarket-Namen sind englisch
+    const q = `${en.name} (${abbr} ${padNumber(card.number)})`;
+    return {
+      ...card,
+      cardmarket: {
+        ...card.cardmarket,
+        url: `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(q)}`
+      }
+    };
+  } catch (e) {
+    return card;
+  }
+}
+
 // Sucht zur TCGdex-Karte das passende Cardmarket-Produkt (gleiches Set, gleicher
 // Name, bei mehreren Versionen gleiche Angriffe) und nimmt dessen Tagespreise.
-async function enrichWithCardmarket(card) {
+async function enrichPrices(card) {
   try {
     await cardmarket.ready(); // nach einem Kaltstart erst den Cardmarket-Index abwarten
     const setId = card.set?.id;
@@ -256,6 +294,10 @@ async function enrichWithCardmarket(card) {
   } catch (e) {
     return card; // Abgleich ist nur ein Bonus: bei Fehlern bleibt der TCGdex-Preis
   }
+}
+
+async function enrichWithCardmarket(card) {
+  return withCmLink(await enrichPrices(card));
 }
 
 async function mapLimit(items, limit, fn) {
@@ -332,7 +374,7 @@ async function refreshOne(id, force = false) {
       try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
     }
     if (card) {
-      card = await enrichWithCardmarket(card);
+      card = await enrichPrices(card);
       data = {
         prices: card.cardmarket.prices,
         productId: card.cardmarket.productId || null,
@@ -650,6 +692,8 @@ app.post('/api/wantlist-names', async (req, res) => {
         const v = {
           name: r.data.name,
           set: r.data.set?.name || null,
+          abbr: await getSetAbbr(r.data.set?.id),
+          number: r.data.localId || null,
           abilities: (r.data.abilities || []).map((a) => a.name).filter(Boolean),
           attacks: (r.data.attacks || []).map((a) => a.name).filter(Boolean)
         };
