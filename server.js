@@ -724,6 +724,16 @@ app.get('/api/cards', async (req, res) => {
       })
     );
 
+    // Fehlerhafte/leere Detailanfragen herausfiltern und Ergebnis senden
+    const validCards = detailed.filter(Boolean);
+    return res.json(validCards);
+
+  } catch (error) {
+    console.error('Fehler bei /api/cards:', error);
+    return res.status(500).json({ error: 'Fehler beim Laden der Karten' });
+  }
+});
+
     let results = detailed.filter(Boolean);
     if (results.length === 0) return res.json(cardmarket.search(parsed.name));
 
