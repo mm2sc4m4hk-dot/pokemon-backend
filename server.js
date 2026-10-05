@@ -686,32 +686,30 @@ app.get('/api/cards', async (req, res) => {
   try {
     const name = typeof req.query.name === 'string' ? req.query.name : '';
     const set = typeof req.query.set === 'string' ? req.query.set : '';
+
     if (!name.trim()) {
       return res.status(400).json({ error: 'Name ist erforderlich' });
     }
+
     const parsed = parseQuery(name);
     if (!parsed.name) {
       return res.status(400).json({ error: 'Bitte einen Kartennamen angeben (z.B. "Glumanda 044").' });
     }
-    const cleanSet = set ? set.trim() : '';
 
+    const cleanSet = set ? set.trim() : '';
     let idToLang = await collectIds(parsed, cleanSet, true);
 
-    // Fallback: falls der Nummernfilter der API nichts findet (z.B. wegen
-    // abweichender Nummern-Schreibweise), ohne Filter suchen und die
-    // Nummer selbst vergleichen.
+    // Fallback: ohne Nummernfilter suchen
     if (idToLang.size === 0 && parsed.number) {
       idToLang = await collectIds(parsed, cleanSet, false);
     }
 
-    // TCGdex kennt die Karte nicht -> in den Cardmarket-Dateien suchen
-    // (ohne Bild und ohne Nummernfilter, dafür mit echtem Preis).
+    // TCGdex kennt die Karte nicht -> in Cardmarket-Dateien suchen
     if (idToLang.size === 0) {
       return res.json(cardmarket.search(parsed.name));
     }
 
-    // Auf max. 40 Karten begrenzen, um nicht zu viele Detailanfragen
-    // gleichzeitig zu feuern.
+    // Auf max. 40 Karten begrenzen
     const entries = Array.from(idToLang.entries()).slice(0, 40);
 
     const detailed = await Promise.all(
@@ -719,7 +717,7 @@ app.get('/api/cards', async (req, res) => {
         try {
           return await fetchDetail(lang, id);
         } catch (e) {
-          return null; // einzelne kaputte Karte überspringen
+          return null;
         }
       })
     );
