@@ -415,13 +415,38 @@ app.post('/api/prices', async (req, res) => {
 // ---------------------------------------------------------------------
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Set-Namen und Reihenfolge (aus der Karten-ID wird die Set-ID abgeleitet)
+// Set-Namen und Reihenfolge (aus der Karten-ID wird die Set-ID abgeleitet, DE + EN)
 let setsIndex = { at: 0, names: new Map(), order: new Map() };
 async function getSetsIndex() {
   if (setsIndex.names.size && Date.now() - setsIndex.at < 6 * 60 * 60 * 1000) return setsIndex;
-  const r = await axios.get(`${TCGDEX_BASE}/en/sets`, { timeout: 20000 });
-  const names = new Map(); const order = new Map();
-  (Array.isArray(r.data) ? r.data : []).forEach((s, i) => { names.set(s.id, s.name); order.set(s.id, i); });
+  
+  const [deRes, enRes] = await Promise.all([
+    axios.get(`${TCGDEX_BASE}/de/sets`, { timeout: 20000 }).catch(() => ({ data: [] })),
+    axios.get(`${TCGDEX_BASE}/en/sets`, { timeout: 20000 }).catch(() => ({ data: [] }))
+  ]);
+
+  const names = new Map();
+  const order = new Map();
+
+  const deList = Array.isArray(deRes.data) ? deRes.data : [];
+  const enList = Array.isArray(enRes.data) ? enRes.data : [];
+
+  // Englische Sets als Basis-Reihenfolge
+  enList.forEach((s, i) => {
+    if (s && s.id) {
+      names.set(s.id, s.name);
+      order.set(s.id, i);
+    }
+  });
+
+  // Deutsche Set-Namen bevorzugen / ergänzen (z. B. "30 Jahre")
+  deList.forEach((s, i) => {
+    if (s && s.id) {
+      if (s.name) names.set(s.id, s.name);
+      if (!order.has(s.id)) order.set(s.id, i);
+    }
+  });
+
   setsIndex = { at: Date.now(), names, order };
   return setsIndex;
 }
@@ -450,10 +475,21 @@ let illustratorCache = { at: 0, list: [] };
 app.get('/api/illustrators', async (req, res) => {
   try {
     if (!illustratorCache.list.length || Date.now() - illustratorCache.at > DAY_MS) {
-      const r = await axios.get(`${TCGDEX_BASE}/en/illustrators`, { timeout: 20000 });
-      const list = (Array.isArray(r.data) ? r.data : [])
-        .map((x) => (typeof x === 'string' ? x : x && x.name)).filter(Boolean)
-        .sort((a, b) => a.localeCompare(b));
+      const [deRes, enRes] = await Promise.all([
+        axios.get(`${TCGDEX_BASE}/de/illustrators`, { timeout: 20000 }).catch(() => ({ data: [] })),
+        axios.get(`${TCGDEX_BASE}/en/illustrators`, { timeout: 20000 }).catch(() => ({ data: [] }))
+      ]);
+
+      const rawDe = Array.isArray(deRes.data) ? deRes.data : [];
+      const rawEn = Array.isArray(enRes.data) ? enRes.data : [];
+
+      const set = new Set();
+      [...rawDe, ...rawEn].forEach((x) => {
+        const name = typeof x === 'string' ? x : x && x.name;
+        if (name) set.add(name.trim());
+      });
+
+      const list = Array.from(set).sort((a, b) => a.localeCompare(b));
       illustratorCache = { at: Date.now(), list };
     }
     res.json(illustratorCache.list);
@@ -476,14 +512,30 @@ app.get('/api/illustrators/:name', async (req, res) => {
   }
 });
 
-// Alle Karten eines Pokémon (nationale Pokédex-Nummer)
+// Alle Karten eines Pokémon (nationale Pokédex-Nummer) – DE & EN zusammenführen
 app.get('/api/dex/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'Ungültige Pokédex-Nummer.' });
-    const r = await axios.get(`${TCGDEX_BASE}/en/dex-ids/${id}`, { timeout: 25000 });
-    const idx = await getSetsIndex().catch(() => ({ names: new Map(), order: new Map() }));
-    res.json({ id, cards: briefsToCards(r.data && r.data.cards, idx) });
+
+    // DE, EN und Set-Index parallel abrufen
+    const [deRes, enRes, idx] = await Promise.all([
+      axios.get(`${TCGDEX_BASE}/de/dex-ids/${id}`, { timeout: 25000 }).catch(() => ({ data: { cards: [] } })),
+      axios.get(`${TCGDEX_BASE}/en/dex-ids/${id}`, { timeout: 25000 }).catch(() => ({ data: { cards: [] } })),
+      getSetsIndex().catch(() => ({ names: new Map(), order: new Map() }))
+    ]);
+
+    const deCards = (deRes.data && Array.isArray(deRes.data.cards)) ? deRes.data.cards : [];
+    const enCards = (enRes.data && Array.isArray(enRes.data.cards)) ? enRes.data.cards : [];
+
+    // Eindeutig nach Karten-ID zusammenführen (deutsche Version bevorzugen)
+    const cardMap = new Map();
+    deCards.forEach((c) => { if (c && c.id) cardMap.set(c.id, c); });
+    enCards.forEach((c) => { if (c && c.id && !cardMap.has(c.id)) cardMap.set(c.id, c); });
+
+    const combinedCards = Array.from(cardMap.values());
+
+    res.json({ id, cards: briefsToCards(combinedCards, idx) });
   } catch (e) {
     const status = e.response?.status === 404 ? 404 : 502;
     if (status === 404) return res.json({ id: parseInt(req.params.id, 10), cards: [] });
@@ -544,12 +596,34 @@ app.get('/api/card/:id', async (req, res) => {
   try {
     const id = String(req.params.id);
     let card = null;
+    let foundLang = null;
+
     for (const lang of ['de', 'en']) {
-      try { card = await fetchDetail(lang, id); break; } catch (e) { /* nächste Sprache */ }
+      try { 
+        card = await fetchDetail(lang, id); 
+        if (card) {
+          foundLang = lang;
+          break; 
+        }
+      } catch (e) { /* nächste Sprache versuchen */ }
     }
+
     if (!card) return res.status(404).json({ error: 'Karte nicht gefunden.' });
-    res.json(await enrichWithCardmarket(card));
+
+    // Sprache am Objekt ergänzen für UI-Badges
+    card.language = foundLang;
+
+    // Cardmarket-Enrichment abfedern, damit die Karte selbst bei Preis-Fehlern lädt
+    try {
+      card = await enrichWithCardmarket(card);
+    } catch (cmError) {
+      console.warn(`Cardmarket-Enrichment fehlgeschlagen für ${id}:`, cmError.message);
+      card.cardmarket = card.cardmarket || null;
+    }
+
+    res.json(card);
   } catch (e) {
+    console.error(`Fehler in /api/card/${req.params.id}:`, e.message);
     res.status(502).json({ error: 'Karte konnte nicht geladen werden.' });
   }
 });
