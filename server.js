@@ -1,21 +1,27 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { GoogleGenAI } = require('@google/genai');
 const cardmarket = require('./cardmarket');
 
 const app = express();
 app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
 
-// CORS: auf Render unter ALLOWED_ORIGINS (kommagetrennt, z. B. https://deine-app.vercel.app) eintragen.
+// CORS-Einstellungen
 const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
 app.use(cors(allowedOrigins.length
   ? { origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)) }
   : undefined));
-app.use(express.json({ limit: '100kb' }));
+
+// WICHTIG: Request-Body-Limit auf 10MB setzen, damit Base64-Kamerabilder verarbeitet werden können!
+app.use(express.json({ limit: '10mb' }));
+
+// Google GenAI Client initialisieren
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Kleines Rate-Limit ohne Zusatzpaket: max. N Anfragen pro Minute und IP
 function rateLimit(max, windowMs = 60 * 1000) {
-  const hits = new Map(); // ip -> { count, resetAt }
+  const hits = new Map();
   setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k); }, windowMs).unref();
   return (req, res, next) => {
     const now = Date.now();
@@ -29,8 +35,10 @@ function rateLimit(max, windowMs = 60 * 1000) {
     next();
   };
 }
+
 app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices', '/api/wantlist-names'], rateLimit(120));
 app.use('/api/img', rateLimit(600));
+app.use('/api/scan-genai', rateLimit(20));
 
 // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
 const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
@@ -269,6 +277,94 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+// ---------------------------------------------------------------------
+// NEUER GENAI SCANNER ENDPUNKT
+// ---------------------------------------------------------------------
+app.post('/api/scan-genai', async (req, res) => {
+  try {
+    const { image } = req.body;
+    if (!image) {
+      return res.status(400).json({ error: 'Kein Bild übertragen.' });
+    }
+
+    const base64Data = image.replace(/^data:image\/(png|jpeg|webp);base64,/, '');
+
+    const prompt = `Analysiere diese Pokémon-Sammelkarte präzise. 
+Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück mit folgenden Werten:
+- "name": Der exakte Name der Karte (in der Originalsprache der Karte, z.B. Charizard, Glurak, リザードン)
+- "number": Die Kartennummer/Collector-Number (z. B. "024/189", "024" oder "SWSH050")
+- "set": Name des Sets oder Set-Abkürzung falls erkennbar (sonst null)
+- "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: 'image/jpeg',
+                data: base64Data
+              }
+            }
+          ]
+        }
+      ],
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const parsedAiResult = JSON.parse(response.text || '{}');
+    const cardName = parsedAiResult.name || '';
+    const cardNumber = parsedAiResult.number || '';
+
+    if (!cardName && !cardNumber) {
+      return res.status(422).json({ 
+        error: 'Die KI konnte keine Karte auf dem Bild erkennen.',
+        raw: parsedAiResult 
+      });
+    }
+
+    const query = [cardName, cardNumber].filter(Boolean).join(' ');
+    const parsed = parseQuery(query);
+    
+    let idToLang = await collectIds(parsed, parsedAiResult.set || '', true);
+    if (idToLang.size === 0 && parsed.number) {
+      idToLang = await collectIds(parsed, parsedAiResult.set || '', false);
+    }
+
+    let results = [];
+    if (idToLang.size > 0) {
+      const entries = Array.from(idToLang.entries()).slice(0, 20);
+      const detailed = await Promise.all(
+        entries.map(async ([id, lang]) => {
+          try { return await fetchDetail(lang, id); } catch (e) { return null; }
+        })
+      );
+      results = detailed.filter(Boolean);
+      results = await mapLimit(results, 8, enrichWithCardmarket);
+    } else {
+      results = cardmarket.search(parsed.name);
+    }
+
+    res.json({
+      aiAnalysis: parsedAiResult,
+      query,
+      results
+    });
+
+  } catch (error) {
+    console.error('Fehler beim GenAI-Scan:', error);
+    res.status(500).json({ error: 'GenAI-Analyse fehlgeschlagen: ' + error.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// WEITERE API ROUTEN
+// ---------------------------------------------------------------------
 let setsListCache = { at: 0, list: [] };
 app.get('/api/sets-list', async (req, res) => {
   try {
@@ -619,9 +715,6 @@ app.post('/api/cards/bulk', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------
-// KARTEN-SUCHE (TCGdex + Cardmarket Fallback)
-// ---------------------------------------------------------------------
 app.get('/api/cards', async (req, res) => {
   try {
     const name = typeof req.query.name === 'string' ? req.query.name : '';
