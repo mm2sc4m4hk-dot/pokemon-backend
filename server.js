@@ -19,6 +19,41 @@ app.use(express.json({ limit: '10mb' }));
 // Google GenAI Client initialisieren
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+// Primärmodell + Ausweichmodell (per Render-Umgebungsvariable änderbar)
+const GEMINI_MODELS = [
+  process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+  process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.0-flash'
+];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const isOverloaded = (e) =>
+  [429, 500, 503, 504].includes(Number(e?.status ?? e?.code)) ||
+  /overload|high demand|unavailable|try again/i.test(String(e?.message || ''));
+
+// Pro Modell bis zu 3 Versuche (1 s, 2 s Pause), danach das nächste Modell
+async function generateWithRetry(request, maxRetries = 3, baseDelay = 1000) {
+  let lastErr;
+  for (const model of GEMINI_MODELS) {
+    for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+      try {
+        return await ai.models.generateContent({ model, ...request });
+      } catch (e) {
+        lastErr = e;
+        if (!isOverloaded(e)) throw e;
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * 2 ** attempt;
+          console.warn(`Gemini (${model}) überlastet, Versuch ${attempt + 1}/${maxRetries}, warte ${delay} ms ...`);
+          await sleep(delay);
+        }
+      }
+    }
+    console.warn(`Gemini ${model} dauerhaft überlastet, versuche das nächste Modell ...`);
+  }
+  if (lastErr) lastErr.geminiBusy = true;
+  throw lastErr;
+}
+
 // Kleines Rate-Limit ohne Zusatzpaket: max. N Anfragen pro Minute und IP
 function rateLimit(max, windowMs = 60 * 1000) {
   const hits = new Map();
@@ -296,8 +331,7 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
 - "set": Name des Sets oder Set-Abkürzung falls erkennbar (sonst null)
 - "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry({
       contents: [
         {
           role: 'user',
@@ -317,7 +351,9 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
       }
     });
 
-    const parsedAiResult = JSON.parse(response.text || '{}');
+    let parsedAiResult = {};
+    try { parsedAiResult = JSON.parse(response.text || '{}'); } catch (e) { parsedAiResult = {}; }
+    if (Array.isArray(parsedAiResult)) parsedAiResult = parsedAiResult[0] || {};
     const cardName = parsedAiResult.name || '';
     const cardNumber = parsedAiResult.number || '';
 
@@ -358,6 +394,9 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
 
   } catch (error) {
     console.error('Fehler beim GenAI-Scan:', error);
+    if (error.geminiBusy) {
+      return res.status(503).json({ error: 'Die KI ist aktuell ausgelastet. Bitte versuche es in wenigen Sekunden erneut.' });
+    }
     res.status(500).json({ error: 'GenAI-Analyse fehlgeschlagen: ' + error.message });
   }
 });
