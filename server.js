@@ -297,7 +297,7 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
 - "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       contents: [
         {
           role: 'user',
