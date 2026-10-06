@@ -19,11 +19,8 @@ app.use(express.json({ limit: '10mb' }));
 // Google GenAI Client initialisieren
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Primärmodell + Ausweichmodell (per Render-Umgebungsvariable änderbar)
-const GEMINI_MODELS = [
-  process.env.GEMINI_MODEL || 'gemini-3.8-flash',
-  process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.0-flash'
-];
+// Nur noch ein Modell (per Render-Umgebungsvariable änderbar)
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -31,24 +28,21 @@ const isOverloaded = (e) =>
   [429, 500, 503, 504].includes(Number(e?.status ?? e?.code)) ||
   /overload|high demand|unavailable|try again/i.test(String(e?.message || ''));
 
-// Pro Modell bis zu 3 Versuche (1 s, 2 s Pause), danach das nächste Modell
-async function generateWithRetry(request, maxRetries = 3, baseDelay = 1000) {
+// Wiederholt mit demselben Modell (Pausen: 1, 2, 4, 8, 8 s ... max. 8 s), bis es klappt
+async function generateWithRetry(request, maxRetries = 6, baseDelay = 1000) {
   let lastErr;
-  for (const model of GEMINI_MODELS) {
-    for (let attempt = 0; attempt < maxRetries; attempt += 1) {
-      try {
-        return await ai.models.generateContent({ model, ...request });
-      } catch (e) {
-        lastErr = e;
-        if (!isOverloaded(e)) throw e;
-        if (attempt < maxRetries - 1) {
-          const delay = baseDelay * 2 ** attempt;
-          console.warn(`Gemini (${model}) überlastet, Versuch ${attempt + 1}/${maxRetries}, warte ${delay} ms ...`);
-          await sleep(delay);
-        }
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    try {
+      return await ai.models.generateContent({ model: GEMINI_MODEL, ...request });
+    } catch (e) {
+      lastErr = e;
+      if (!isOverloaded(e)) throw e;
+      if (attempt < maxRetries - 1) {
+        const delay = Math.min(baseDelay * 2 ** attempt, 8000);
+        console.warn(`Gemini (${GEMINI_MODEL}) überlastet, Versuch ${attempt + 1}/${maxRetries}, warte ${delay} ms ...`);
+        await sleep(delay);
       }
     }
-    console.warn(`Gemini ${model} dauerhaft überlastet, versuche das nächste Modell ...`);
   }
   if (lastErr) lastErr.geminiBusy = true;
   throw lastErr;
