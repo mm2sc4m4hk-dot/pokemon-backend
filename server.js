@@ -26,22 +26,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const isOverloaded = (e) =>
   [429, 500, 503, 504].includes(Number(e?.status ?? e?.code)) ||
-  /overload|high demand|unavailable|try again/i.test(String(e?.message || ''));
+  e?.name === 'AbortError' ||
+  /overload|high demand|unavailable|try again|abort/i.test(String(e?.message || ''));
 
-// Wiederholt mit demselben Modell (Pausen: 1, 2, 4, 8, 8 s ... max. 8 s), bis es klappt
-async function generateWithRetry(request, maxRetries = 6, baseDelay = 1000) {
+// Wiederholt mit demselben Modell; jeder Versuch bricht nach 12 s ab statt zu hängen
+async function generateWithRetry(request, maxRetries = 4, baseDelay = 800) {
   let lastErr;
   for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
     try {
-      return await ai.models.generateContent({ model: GEMINI_MODEL, ...request });
+      return await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        ...request,
+        config: { ...request.config, abortSignal: ctrl.signal }
+      });
     } catch (e) {
       lastErr = e;
       if (!isOverloaded(e)) throw e;
       if (attempt < maxRetries - 1) {
-        const delay = Math.min(baseDelay * 2 ** attempt, 8000);
-        console.warn(`Gemini (${GEMINI_MODEL}) überlastet, Versuch ${attempt + 1}/${maxRetries}, warte ${delay} ms ...`);
+        const delay = Math.min(baseDelay * 2 ** attempt, 4000);
+        console.warn(`Gemini (${GEMINI_MODEL}) überlastet/Timeout, Versuch ${attempt + 1}/${maxRetries}, warte ${delay} ms ...`);
         await sleep(delay);
       }
+    } finally {
+      clearTimeout(timer);
     }
   }
   if (lastErr) lastErr.geminiBusy = true;
@@ -341,7 +350,10 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
         }
       ],
       config: {
-        responseMimeType: 'application/json'
+        responseMimeType: 'application/json',
+        temperature: 0,
+        maxOutputTokens: 300,
+        thinkingConfig: { thinkingBudget: 0 } // bei Fehler 400: { thinkingLevel: 'minimal' }
       }
     });
 
@@ -368,7 +380,7 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
 
     let results = [];
     if (idToLang.size > 0) {
-      const entries = Array.from(idToLang.entries()).slice(0, 20);
+      const entries = Array.from(idToLang.entries()).slice(0, 8);
       const detailed = await Promise.all(
         entries.map(async ([id, lang]) => {
           try { return await fetchDetail(lang, id); } catch (e) { return null; }
