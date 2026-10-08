@@ -1,8 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { GoogleGenAI } = require('@google/genai');
 const cardmarket = require('./cardmarket');
+const { scanCard } = require('./scanProviders');
 
 const app = express();
 app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
@@ -16,46 +16,7 @@ app.use(cors(allowedOrigins.length
 // WICHTIG: Request-Body-Limit auf 10MB setzen, damit Base64-Kamerabilder verarbeitet werden können!
 app.use(express.json({ limit: '10mb' }));
 
-// Google GenAI Client initialisieren
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-// Nur noch ein Modell (per Render-Umgebungsvariable änderbar)
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const isOverloaded = (e) =>
-  [429, 500, 503, 504].includes(Number(e?.status ?? e?.code)) ||
-  e?.name === 'AbortError' ||
-  /overload|high demand|unavailable|try again|abort/i.test(String(e?.message || ''));
-
-// Wiederholt mit demselben Modell; jeder Versuch bricht nach 12 s ab statt zu hängen
-async function generateWithRetry(request, maxRetries = 4, baseDelay = 800) {
-  let lastErr;
-  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
-    try {
-      return await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        ...request,
-        config: { ...request.config, abortSignal: ctrl.signal }
-      });
-    } catch (e) {
-      lastErr = e;
-      if (!isOverloaded(e)) throw e;
-      if (attempt < maxRetries - 1) {
-        const delay = Math.min(baseDelay * 2 ** attempt, 4000);
-        console.warn(`Gemini (${GEMINI_MODEL}) überlastet/Timeout, Versuch ${attempt + 1}/${maxRetries}, warte ${delay} ms ...`);
-        await sleep(delay);
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  if (lastErr) lastErr.geminiBusy = true;
-  throw lastErr;
-}
 
 // Kleines Rate-Limit ohne Zusatzpaket: max. N Anfragen pro Minute und IP
 function rateLimit(max, windowMs = 60 * 1000) {
@@ -338,39 +299,15 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
 - "set": Name des Sets oder Set-Abkürzung falls erkennbar (sonst null)
 - "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")`;
 
-    const response = await generateWithRetry({
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: base64Data
-              }
-            }
-          ]
-        }
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0,
-        maxOutputTokens: 300,
-        thinkingConfig: { thinkingBudget: 0 } // bei Fehler 400: { thinkingLevel: 'minimal' }
-      }
-    });
-
+    // Mehrere Scan-Anbieter mit Fallback (siehe scanProviders.js)
+    const parsedAiResult = await scanCard(base64Data, prompt);
     tAi = Date.now() - t0;
-    let parsedAiResult = {};
-    try { parsedAiResult = JSON.parse(response.text || '{}'); } catch (e) { parsedAiResult = {}; }
-    if (Array.isArray(parsedAiResult)) parsedAiResult = parsedAiResult[0] || {};
     const cardName = parsedAiResult.name || '';
     const cardNumber = parsedAiResult.number || '';
 
     if (!cardName && !cardNumber) {
       return res.status(422).json({ 
-        error: 'Die KI konnte keine Karte auf dem Bild erkennen.',
+        error: 'Auf dem Bild konnte keine Karte erkannt werden.',
         raw: parsedAiResult 
       });
     }
@@ -398,7 +335,7 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
       tSearch = Date.now() - t0 - tAi;
       results = cardmarket.search(parsed.name);
     }
-    console.log(`Scan: KI ${tAi} ms, Suche ${tSearch} ms, Preise ${Date.now() - t0 - tAi - tSearch} ms, gesamt ${Date.now() - t0} ms, ${results.length} Treffer`);
+    console.log(`Scan: Erkennung ${tAi} ms, Suche ${tSearch} ms, Preise ${Date.now() - t0 - tAi - tSearch} ms, gesamt ${Date.now() - t0} ms, ${results.length} Treffer`);
 
     res.json({
       aiAnalysis: parsedAiResult,
@@ -407,11 +344,11 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
     });
 
   } catch (error) {
-    console.error('Fehler beim GenAI-Scan:', error);
+    console.error('Fehler beim Scan:', error);
     if (error.geminiBusy) {
-      return res.status(503).json({ error: 'Die KI ist aktuell ausgelastet. Bitte versuche es in wenigen Sekunden erneut.' });
+      return res.status(503).json({ error: 'Der Scan ist aktuell ausgelastet. Bitte versuche es in wenigen Sekunden erneut.' });
     }
-    res.status(500).json({ error: 'GenAI-Analyse fehlgeschlagen: ' + error.message });
+    res.status(500).json({ error: 'Scan fehlgeschlagen: ' + error.message });
   }
 });
 
