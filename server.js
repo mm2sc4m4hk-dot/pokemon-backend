@@ -288,9 +288,11 @@ async function withCmLink(card) {
   }
 }
 
-async function enrichPrices(card) {
+async function enrichPrices(card, maxWaitMs = 0) {
   try {
-    await cardmarket.ready();
+    // maxWaitMs > 0: nicht länger auf die (große) Cardmarket-Datei warten, dann gelten die TCGdex-Preise
+    if (maxWaitMs > 0) await Promise.race([cardmarket.ready(), sleep(maxWaitMs)]);
+    else await cardmarket.ready();
     const setId = card.set?.id;
     if (!setId || !cardmarket.hasSet(setId)) return card;
     const en = await getEnglish(card);
@@ -303,8 +305,8 @@ async function enrichPrices(card) {
   }
 }
 
-async function enrichWithCardmarket(card) {
-  return withCmLink(await enrichPrices(card));
+async function enrichWithCardmarket(card, maxWaitMs = 0) {
+  return withCmLink(await enrichPrices(card, maxWaitMs));
 }
 
 async function mapLimit(items, limit, fn) {
@@ -319,6 +321,8 @@ async function mapLimit(items, limit, fn) {
 // NEUER GENAI SCANNER ENDPUNKT
 // ---------------------------------------------------------------------
 app.post('/api/scan-genai', async (req, res) => {
+  const t0 = Date.now();
+  let tAi = 0; let tSearch = 0;
   try {
     const { image } = req.body;
     if (!image) {
@@ -357,6 +361,7 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
       }
     });
 
+    tAi = Date.now() - t0;
     let parsedAiResult = {};
     try { parsedAiResult = JSON.parse(response.text || '{}'); } catch (e) { parsedAiResult = {}; }
     if (Array.isArray(parsedAiResult)) parsedAiResult = parsedAiResult[0] || {};
@@ -387,10 +392,13 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
         })
       );
       results = detailed.filter(Boolean);
-      results = await mapLimit(results, 8, enrichWithCardmarket);
+      tSearch = Date.now() - t0 - tAi;
+      results = await mapLimit(results, 8, (c) => enrichWithCardmarket(c, 3000));
     } else {
+      tSearch = Date.now() - t0 - tAi;
       results = cardmarket.search(parsed.name);
     }
+    console.log(`Scan: KI ${tAi} ms, Suche ${tSearch} ms, Preise ${Date.now() - t0 - tAi - tSearch} ms, gesamt ${Date.now() - t0} ms, ${results.length} Treffer`);
 
     res.json({
       aiAnalysis: parsedAiResult,
