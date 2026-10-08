@@ -8,16 +8,18 @@
 //   GROQ_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY
 // Optional:
 //   SCAN_PROVIDERS=groq,gemini,mistral,openrouter   (Reihenfolge)
-//   GROQ_MODEL, GEMINI_MODELS (kommagetrennt), MISTRAL_MODEL, OPENROUTER_MODEL
+//   GROQ_MODEL, GEMINI_MODELS (kommagetrennt, z. B. zwei Modelle als Ausweichlösung),
+//   MISTRAL_MODEL, OPENROUTER_MODEL
 //   SCAN_HEDGE_MS=3500, SCAN_TIMEOUT_MS=15000
 //
-// NEU: Groq und OpenRouter suchen sich bei "404 Modell nicht gefunden" automatisch ein
-// passendes Vision-Modell aus der Modellliste des Anbieters und merken es sich.
+// Groq und OpenRouter suchen bei "Modell nicht gefunden" selbst ein passendes Modell aus der
+// Modellliste des Anbieters (und loggen die Liste, damit du das richtige fest eintragen kannst).
 
 const { GoogleGenAI } = require('@google/genai');
 
 const HEDGE_MS = Number(process.env.SCAN_HEDGE_MS) || 3500;
 const TIMEOUT_MS = Number(process.env.SCAN_TIMEOUT_MS) || 15000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const cold = new Map();
 const isCold = (name) => (cold.get(name) || 0) > Date.now();
@@ -25,7 +27,7 @@ const setCold = (name, ms) => cold.set(name, Date.now() + ms);
 
 // ---------- JSON aus Modellantwort holen ----------
 function parseJson(text) {
-  const t = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const t = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   const a = t.indexOf('{');
   const b = t.lastIndexOf('}');
   if (a === -1 || b === -1) throw new Error('Keine JSON-Antwort');
@@ -36,25 +38,25 @@ function parseJson(text) {
 
 const valid = (o) => !!(o && (String(o.name || '').trim() || String(o.number || '').trim()));
 
-// Text aus einer Gemini-Antwort holen (r.text kann bei Thinking-Modellen leer sein)
 function geminiText(r) {
   if (r && r.text) return r.text;
   const parts = r?.candidates?.[0]?.content?.parts || [];
   return parts.filter((p) => p.text && !p.thought).map((p) => p.text).join('');
 }
 
-// ---------- Anbieter ----------
+const isOverloaded = (e) => Number(e?.status ?? e?.code) === 503 || /UNAVAILABLE|high demand|overload/i.test(String(e?.message));
+
+// ---------- Gemini ----------
 function geminiProviders() {
   if (!process.env.GEMINI_API_KEY) return [];
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const models = String(process.env.GEMINI_MODELS || process.env.GEMINI_MODEL || 'gemini-3.8-flash')
+  const models = String(process.env.GEMINI_MODELS || process.env.GEMINI_MODEL || 'gemini-3.8-flash,gemini-3.1-flash-lite-preview')
     .split(',').map((s) => s.trim()).filter(Boolean);
   return models.map((model) => ({
     name: `gemini:${model}`,
     group: 'gemini',
     async call(b64, prompt, signal) {
       const contents = [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: b64 } }] }];
-      // 1024 statt 300: bei Thinking-Modellen zählen Denk-Tokens mit, sonst bleibt der Text leer
       const base = { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 1024, abortSignal: signal };
       const run = async (thinkingConfig) => {
         const r = await ai.models.generateContent({ model, contents, config: { ...base, thinkingConfig } });
@@ -67,44 +69,71 @@ function geminiProviders() {
         }
         return parseJson(text);
       };
+      const attempt = async () => {
+        try {
+          return await run({ thinkingBudget: 0 });
+        } catch (e) {
+          if (Number(e?.status ?? e?.code) !== 400) throw e;
+          return run({ thinkingLevel: 'minimal' });
+        }
+      };
       try {
-        return await run({ thinkingBudget: 0 });
+        return await attempt();
       } catch (e) {
-        // Manche Modelle lehnen thinkingBudget ab (HTTP 400) -> mit thinkingLevel versuchen
-        if (Number(e?.status ?? e?.code) !== 400) throw e;
-        return run({ thinkingLevel: 'minimal' });
+        // Kurzzeitige Überlast bei Google (503): einmal nach 1 s nochmal versuchen
+        if (!isOverloaded(e) || signal.aborted) throw e;
+        await sleep(1000);
+        if (signal.aborted) throw e;
+        return attempt();
       }
     }
   }));
 }
 
-// Modellliste des Anbieters abfragen und passende Vision-Kandidaten zurückgeben
+// ---------- Modellsuche (Groq / OpenRouter) ----------
 async function discoverGroq(key, signal) {
   const res = await fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: `Bearer ${key}` }, signal });
-  if (!res.ok) return [];
+  if (!res.ok) { console.warn(`groq: Modellliste HTTP ${res.status}`); return []; }
   const data = await res.json();
-  return (data.data || []).map((m) => m.id)
-    .filter((id) => /llama-4|vision|scout|maverick|pixtral|qwen.*vl|gemma/i.test(id) && !/guard|whisper|tts|prompt-guard|safeguard/i.test(id));
+  const ids = (data.data || []).filter((m) => m.active !== false).map((m) => m.id);
+  console.log('groq: verfügbare Modelle:', ids.join(', ') || 'keine');
+  const chat = ids.filter((id) => !/whisper|tts|guard|orpheus|embed|safeguard|playai/i.test(id));
+  const likely = chat.filter((id) => /qwen3\.6|vision|scout|maverick|llama-4|pixtral|-vl|vl-/i.test(id));
+  // Wahrscheinliche Vision-Modelle zuerst, danach der Rest (Modelle ohne Bildeingabe lehnen schnell mit 400 ab)
+  return [...likely, ...chat.filter((id) => !likely.includes(id))].slice(0, 6);
 }
 
 async function discoverOpenRouter(key, signal) {
   const res = await fetch('https://openrouter.ai/api/v1/models', { headers: { Authorization: `Bearer ${key}` }, signal });
-  if (!res.ok) return [];
+  if (!res.ok) { console.warn(`openrouter: Modellliste HTTP ${res.status}`); return []; }
   const data = await res.json();
-  return (data.data || [])
-    .filter((m) => (m.architecture?.input_modalities || []).includes('image') && (String(m.id).endsWith(':free') || Number(m.pricing?.prompt) === 0))
-    .map((m) => m.id);
+  const score = (id) => (/gemma-4/.test(id) ? 0 : /gemma-3|qwen.*vl|llama|mistral|pixtral/.test(id) ? 1 : /preview/.test(id) ? 3 : 2);
+  const ids = (data.data || [])
+    .filter((m) => {
+      const inp = m.architecture?.input_modalities || [];
+      const out = m.architecture?.output_modalities || ['text'];
+      const free = String(m.id).endsWith(':free') || Number(m.pricing?.prompt) === 0;
+      return free && inp.includes('image') && out.length === 1 && out[0] === 'text' && !/safety|guard|lyria|image-gen/i.test(m.id);
+    })
+    .map((m) => m.id)
+    .sort((a, b) => score(a) - score(b));
+  console.log('openrouter: Vision-Kandidaten:', ids.join(', ') || 'keine');
+  return ids.slice(0, 6);
 }
+
+// ---------- OpenAI-kompatible Anbieter ----------
+const SKIP_STATUS = [400, 403, 404, 422]; // Modell passt nicht / nicht freigegeben -> nächsten Kandidaten probieren
+const REDISCOVER_MS = 10 * 60 * 1000;
 
 function openAiCompat({ group, url, key, model, jsonMode = true, discover }) {
   if (!key) return [];
-  const state = { current: model, discovered: null, tried: new Set() };
+  const state = { current: model, discovered: null, discoveredAt: 0, tried: new Set() };
 
   async function request(m, b64, prompt, signal) {
     const body = {
       model: m,
       temperature: 0,
-      max_tokens: 300,
+      max_tokens: 1024,
       messages: [{
         role: 'user',
         content: [
@@ -127,8 +156,16 @@ function openAiCompat({ group, url, key, model, jsonMode = true, discover }) {
       throw err;
     }
     const data = await res.json();
-    return parseJson(data?.choices?.[0]?.message?.content);
+    try {
+      return parseJson(data?.choices?.[0]?.message?.content);
+    } catch (e) {
+      e.parse = true; // Modell antwortet, aber kein JSON -> anderen Kandidaten probieren
+      e.message = `${group}: ${e.message} (${m})`;
+      throw e;
+    }
   }
+
+  const skippable = (e) => SKIP_STATUS.includes(e.status) || e.parse;
 
   return [{
     get name() { return `${group}:${state.current}`; },
@@ -137,16 +174,16 @@ function openAiCompat({ group, url, key, model, jsonMode = true, discover }) {
       try {
         return await request(state.current, b64, prompt, signal);
       } catch (e) {
-        // Modell unbekannt -> Modellliste holen und Kandidaten der Reihe nach probieren
-        if (!discover || ![400, 404].includes(e.status)) throw e;
+        if (!discover || !skippable(e)) throw e;
         state.tried.add(state.current);
-        if (!state.discovered) {
+        if (!state.discovered || Date.now() - state.discoveredAt > REDISCOVER_MS) {
+          if (state.discovered) state.tried = new Set([state.current]);
           try { state.discovered = await discover(key, signal); } catch (err) { state.discovered = []; }
-          console.log(`${group}: Modellsuche, Kandidaten:`, state.discovered.slice(0, 8).join(', ') || 'keine');
+          state.discoveredAt = Date.now();
         }
         let last = e;
         for (const cand of state.discovered) {
-          if (state.tried.has(cand)) continue;
+          if (state.tried.has(cand) || signal.aborted) continue;
           state.tried.add(cand);
           try {
             const r = await request(cand, b64, prompt, signal);
@@ -155,7 +192,7 @@ function openAiCompat({ group, url, key, model, jsonMode = true, discover }) {
             return r;
           } catch (err) {
             last = err;
-            if (![400, 404].includes(err.status)) throw err; // 429/5xx etc. -> normal behandeln
+            if (!skippable(err)) throw err; // 429 / 5xx / Abbruch -> normal behandeln
           }
         }
         throw last;
@@ -168,7 +205,7 @@ function buildProviders() {
   const all = {
     groq: () => openAiCompat({
       group: 'groq', url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY,
-      model: process.env.GROQ_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct',
+      model: process.env.GROQ_MODEL || 'qwen/qwen3.6-27b',
       discover: discoverGroq
     }),
     gemini: geminiProviders,
@@ -178,7 +215,7 @@ function buildProviders() {
     }),
     openrouter: () => openAiCompat({
       group: 'openrouter', url: 'https://openrouter.ai/api/v1/chat/completions', key: process.env.OPENROUTER_API_KEY,
-      model: process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it:free', jsonMode: false,
+      model: process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free', jsonMode: false,
       discover: discoverOpenRouter
     })
   };
@@ -218,6 +255,7 @@ async function scanCard(base64Data, prompt) {
       controllers.push(ctrl);
       const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
       const t0 = Date.now();
+      const pname = p.name;
 
       p.call(base64Data, prompt, ctrl.signal)
         .then((obj) => {
@@ -228,12 +266,12 @@ async function scanCard(base64Data, prompt) {
         .catch((e) => {
           if (done) return;
           const status = Number(e?.status ?? e?.code);
-          const busy = [429, 500, 502, 503, 504].includes(status) || e?.name === 'AbortError' || /overload|high demand|unavailable|quota/i.test(String(e?.message));
-          if (busy) setCold(p.name, (e.retryAfter || 60) * 1000);
-          else if ([400, 401, 403, 404].includes(status)) setCold(p.name, 10 * 60 * 1000);
-          else setCold(p.name, 30 * 1000); // z. B. leere Antwort: kurz aussetzen
-          errors.push({ name: p.name, busy, msg: e?.message });
-          console.warn(`Scan-Anbieter ${p.name} fehlgeschlagen (${e?.message || e}) nach ${Date.now() - t0} ms`);
+          const busy = [429, 500, 502, 503, 504].includes(status) || e?.name === 'AbortError' || isOverloaded(e);
+          if (busy) setCold(pname, (e.retryAfter || 60) * 1000);
+          else if ([400, 401, 403, 404].includes(status)) setCold(pname, 10 * 60 * 1000);
+          else setCold(pname, 30 * 1000);
+          errors.push({ name: pname, busy, msg: e?.message });
+          console.warn(`Scan-Anbieter ${pname} fehlgeschlagen (${e?.message || e}) nach ${Date.now() - t0} ms`);
         })
         .finally(() => {
           clearTimeout(timer);
@@ -241,8 +279,8 @@ async function scanCard(base64Data, prompt) {
           if (done) return;
           if (started < list.length) startNext();
           else if (pending === 0) {
-            const err = new Error('Alle Scan-Anbieter sind fehlgeschlagen: ' + errors.map((x) => `${x.name} (${x.msg})`).join('; '));
-            err.geminiBusy = errors.some((x) => x.busy); // nur echte Überlast -> HTTP 503, sonst 500 mit Klartext
+            const err = new Error('Alle Scan-Anbieter sind fehlgeschlagen: ' + errors.map((x) => `${x.name} (${String(x.msg).slice(0, 120)})`).join('; '));
+            err.geminiBusy = errors.some((x) => x.busy);
             err.details = errors;
             finish(reject, err);
           }
