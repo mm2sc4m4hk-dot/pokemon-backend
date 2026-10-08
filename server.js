@@ -297,11 +297,21 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
 - "name": Der exakte Name der Karte (in der Originalsprache der Karte, z.B. Charizard, Glurak, リザードン)
 - "number": Die Kartennummer/Collector-Number (z. B. "024/189", "024" oder "SWSH050")
 - "set": Name des Sets oder Set-Abkürzung falls erkennbar (sonst null)
-- "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")`;
+- "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")
+- "variant": Druckvariante, nur wenn du sie sicher erkennst, sonst null:
+    "reverse" = Folien-Glanz auf der ganzen Karte AUSSER im Bildfenster (das Artwork selbst ist matt, Rahmen/Hintergrund glitzert),
+    "holo" = Glitzer/Folie nur im Bildfenster (Artwork), Rahmen ist matt,
+    "normal" = keinerlei Folieneffekt.
+  Reflexe von Licht oder Blitz sind KEIN Holo. Bei Zweifel: null.`;
 
     // Mehrere Scan-Anbieter mit Fallback (siehe scanProviders.js)
     const parsedAiResult = await scanCard(base64Data, prompt);
     tAi = Date.now() - t0;
+    // Variante normalisieren: nur normal | reverse | holo | null
+    {
+      const raw = String(parsedAiResult.variant || '').toLowerCase().replace(/[^a-z]/g, '');
+      parsedAiResult.variant = raw === 'reverseholo' ? 'reverse' : (['normal', 'reverse', 'holo'].includes(raw) ? raw : null);
+    }
     const cardName = parsedAiResult.name || '';
     const cardNumber = parsedAiResult.number || '';
 
