@@ -12,7 +12,7 @@
 //
 // RAM-Strategie für den 512-MB-Render-Gratisplan:
 // - Dateien werden nacheinander (nicht parallel) geladen, um den Speicher-Gipfel niedrig zu halten
-// - Nach dem Parsen werden Rohdaten sofort freigegeben (null zuweisen)
+// - Die JSON-Dateien werden als Stream gelesen (streamArray): nie die ganze Datei im RAM
 // - Pro Produkt werden nur die benötigten Felder im Index behalten
 // - Node.js sollte mit --max-old-space-size=256 gestartet werden
 const axios = require('axios');
@@ -64,45 +64,76 @@ async function downloadToFile(url, destFile) {
   await streamPipeline(res.data, fs.createWriteStream(destFile));
 }
 
-async function loadJson(url, localFile) {
+// Liest eine große JSON-Datei der Form { "createdAt": "...", "<arrayKey>": [ {...}, {...} ] } als Stream
+// und ruft onItem für jedes Objekt des Arrays auf. Es liegt immer nur ein Objekt (plus ein Datei-Block)
+// im Speicher, nicht die ganze Datei als String UND als Objektbaum.
+// Rückgabe: { createdAt } oder null, wenn weder URL noch lokale Datei vorhanden sind.
+async function streamArray(url, localFile, arrayKey, onItem) {
+  let file = null;
+  let tmpFile = null;
   if (url) {
-    const tmpFile = path.join(TMP_DIR, localFile.replace('.json', '-' + Date.now() + '.json'));
+    tmpFile = path.join(TMP_DIR, localFile.replace('.json', '-' + Date.now() + '.json'));
     try {
       await downloadToFile(url, tmpFile);
-      const content = fs.readFileSync(tmpFile, 'utf8');
-      try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
-      return typeof content === 'string' ? JSON.parse(content) : content;
     } catch (e) {
+      try { fs.unlinkSync(tmpFile); } catch (err) { /* ignore */ }
       await sendDiscordAlert('cardmarket-download', `Cardmarket-Download fehlgeschlagen: ${localFile}`, e);
       throw e;
     }
+    file = tmpFile;
+  } else {
+    const local = path.join(DATA_DIR, localFile);
+    if (!fs.existsSync(local)) return null;
+    file = local;
   }
-  const file = path.join(DATA_DIR, localFile);
-  if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
-  return null;
-}
 
-function build(priceFile, productFile) {
-  const prices = new Map();
-  for (const r of priceFile.priceGuides || []) prices.set(r.idProduct, r);
+  try {
+    const input = fs.createReadStream(file, { encoding: 'utf8', highWaterMark: 256 * 1024 });
+    let depth = 0; let inStr = false; let esc = false;
+    let rootBuf = ''; let curKey = null; let item = ''; let itemStart = -1;
 
-  const list = [];
-  for (const p of productFile.products || []) {
-    // "Sceptile [Leaf Blade | Power Poison]" -> Basisname "Sceptile"
-    const base = String(p.name || '').split(/\s*[\[(]/)[0];
-    // Angriffsnamen aus "[Angriff A | Angriff B]" (für den genauen Abgleich)
-    const br = String(p.name).match(/\[(.*)\]/);
-    const attacks = br ? br[1].split('|').map(a => words(a)).filter(Boolean) : [];
-    list.push({
-      id: p.idProduct,
-      name: p.name,
-      attacks,
-      baseWords: words(base),
-      expansionId: p.idExpansion,
-      price: prices.get(p.idProduct) || null
-    });
+    for await (const chunk of input) {
+      for (let i = 0; i < chunk.length; i += 1) {
+        const c = chunk[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (c === '\\') esc = true;
+          else if (c === '"') inStr = false;
+          if (depth === 1) rootBuf += c;
+          continue;
+        }
+        if (c === '"') { inStr = true; if (depth === 1) rootBuf += c; continue; }
+        if (c === '{' || c === '[') {
+          if (depth === 1 && c === '[') {
+            const m = /"([^"]*)"\s*:\s*$/.exec(rootBuf);
+            curKey = m ? m[1] : null;
+            rootBuf = '';
+          }
+          if (depth === 2 && c === '{' && curKey === arrayKey) { itemStart = i; item = ''; }
+          depth += 1;
+          continue;
+        }
+        if (c === '}' || c === ']') {
+          depth -= 1;
+          if (depth === 2 && c === '}' && itemStart !== -1) {
+            item += chunk.slice(itemStart, i + 1);
+            itemStart = -1;
+            onItem(JSON.parse(item));
+            item = '';
+          } else if (depth === 1 && c === ']') {
+            curKey = null;
+          }
+          continue;
+        }
+        if (depth === 1) rootBuf += c;
+      }
+      if (itemStart !== -1) { item += chunk.slice(itemStart); itemStart = 0; }
+    }
+    const created = /"createdAt"\s*:\s*"([^"]*)"/.exec(rootBuf);
+    return { createdAt: created ? created[1] : null };
+  } finally {
+    if (tmpFile) { try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ } }
   }
-  return { list, date: priceFile.createdAt || null };
 }
 
 let refreshing = null;
@@ -119,31 +150,18 @@ async function refreshIfStale(maxAgeMs = 6 * 60 * 60 * 1000) {
 }
 
 async function doRefresh() {
-  let priceFile = null;
-  let productFile = null;
   try {
-    // Nacheinander laden statt parallel, um den RAM-Gipfel niedrig zu halten
-    priceFile = await loadJson(PRICE_URL, 'price_guide.json');
-    if (!priceFile) {
+    // Nacheinander laden und beim Lesen sofort auf die nötigen Felder reduzieren (RAM-Gipfel niedrig halten)
+    const prices = new Map();
+    const guide = await streamArray(PRICE_URL, 'price_guide.json', 'priceGuides', (r) => { prices.set(r.idProduct, slim(r)); });
+    if (!guide) {
       meta.error = 'Keine Cardmarket-Price-Guide-Datei konfiguriert (CM_PRICE_GUIDE_URL oder data/price_guide.json).';
       return false;
     }
+    const priceGuideDate = guide.createdAt || null;
 
-    // Preis-Map bauen und Datum sichern, bevor Rohdaten freigegeben werden
-    const prices = new Map();
-    const priceGuideDate = priceFile.createdAt || null;
-    for (const r of priceFile.priceGuides || []) prices.set(r.idProduct, slim(r));
-    priceFile = null; // Rohdaten freigeben, bevor die Produktdatei geladen wird
-
-    productFile = await loadJson(PRODUCTS_URL, 'products_singles.json');
-    if (!productFile) {
-      meta.error = 'Keine Cardmarket-Produktdatei konfiguriert (CM_PRODUCTS_URL oder data/products_singles.json).';
-      return false;
-    }
-
-    // Index aufbauen – nur benötigte Felder pro Produkt behalten
     const list = [];
-    for (const p of productFile.products || []) {
+    const prod = await streamArray(PRODUCTS_URL, 'products_singles.json', 'products', (p) => {
       const base = String(p.name || '').split(/\s*[\[(]/)[0];
       const br = String(p.name).match(/\[(.*)\]/);
       const attacks = br ? br[1].split('|').map(a => words(a)).filter(Boolean) : [];
@@ -155,8 +173,11 @@ async function doRefresh() {
         expansionId: p.idExpansion,
         price: prices.get(p.idProduct) || null
       });
+    });
+    if (!prod) {
+      meta.error = 'Keine Cardmarket-Produktdatei konfiguriert (CM_PRODUCTS_URL oder data/products_singles.json).';
+      return false;
     }
-    productFile = null; // Rohdaten freigeben
 
     index = list;
     byId = new Map(index.map(p => [p.id, p]));
@@ -171,7 +192,6 @@ async function doRefresh() {
       if (!byExpName.has(k)) byExpName.set(k, []);
       byExpName.get(k).push(p);
     }
-    // Grosse Hilfsstrukturen freigeben
     if (global.gc) global.gc();
     console.log(`Cardmarket-Index geladen: ${index.length} Produkte (Price Guide ${meta.priceGuideDate})`);
     return true;
