@@ -16,6 +16,7 @@
 // Modellliste des Anbieters (und loggen die Liste, damit du das richtige fest eintragen kannst).
 
 const { GoogleGenAI } = require('@google/genai');
+const { sendDiscordAlert } = require('./discordAlert');
 
 const HEDGE_MS = Number(process.env.SCAN_HEDGE_MS) || 3500;
 const TIMEOUT_MS = Number(process.env.SCAN_TIMEOUT_MS) || 15000;
@@ -282,6 +283,8 @@ async function scanCard(base64Data, prompt) {
             const err = new Error('Alle Scan-Anbieter sind fehlgeschlagen: ' + errors.map((x) => `${x.name} (${String(x.msg).slice(0, 120)})`).join('; '));
             err.geminiBusy = errors.some((x) => x.busy);
             err.details = errors;
+            // Discord-Alert feuern (nicht blockierend, max. 1x pro 10 Min)
+            sendDiscordAlert('ki-scan', 'Alle Scan-Anbieter sind fehlgeschlagen', JSON.stringify(errors.map((x) => ({ name: x.name, msg: String(x.msg || x).slice(0, 200) })))).catch(() => {});
             finish(reject, err);
           }
         });

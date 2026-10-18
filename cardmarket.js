@@ -4,15 +4,26 @@
 // Konfiguration über Umgebungsvariablen (Render -> Environment):
 //   CM_PRICE_GUIDE_URL  direkter Link zur Price-Guide-JSON
 //   CM_PRODUCTS_URL     direkter Link zur Produktkatalog-JSON (Einzelkarten)
+//   DISCORD_WEBHOOK_URL optional: Discord-Webhook für Fehler-Benachrichtigungen
 // Alternativ liegen die Dateien lokal unter data/price_guide.json und
 // data/products_singles.json. Optional: data/expansions.json
 // ({ "1585": { "name": "Primal Clash", "tcgdexId": "xy5" }, ... }) für Set-Namen und
 // den genauen Preisabgleich (erzeugt von build-expansions.js).
+//
+// RAM-Strategie für den 512-MB-Render-Gratisplan:
+// - Dateien werden nacheinander (nicht parallel) geladen, um den Speicher-Gipfel niedrig zu halten
+// - Nach dem Parsen werden Rohdaten sofort freigegeben (null zuweisen)
+// - Pro Produkt werden nur die benötigten Felder im Index behalten
+// - Node.js sollte mit --max-old-space-size=256 gestartet werden
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { pipeline } = require('stream');
+const { promisify } = require('util');
+const { sendDiscordAlert } = require('./discordAlert');
 
 const DATA_DIR = path.join(__dirname, 'data');
+const TMP_DIR = path.join(__dirname, 'data', 'tmp');
 const PRICE_URL = process.env.CM_PRICE_GUIDE_URL || '';
 const PRODUCTS_URL = process.env.CM_PRODUCTS_URL || '';
 const REFRESH_MS = 12 * 60 * 60 * 1000; // zweimal täglich nachsehen
@@ -27,14 +38,44 @@ const meta = { loadedAt: null, products: 0, priceGuideDate: null, error: null };
 // Cardmarket nennt die Holo-Reihe je nach Datei "-holo" oder "-foil": beide Schreibweisen lesen
 const holoField = (r, base) => r[`${base}-holo`] ?? r[`${base}-foil`];
 
+// Nur die Preisfelder behalten, die toCard/applyProduct/search wirklich lesen (spart RAM im Index)
+const slim = (r) => r && {
+  trend: r.trend, avg: r.avg, avg1: r.avg1, avg7: r.avg7, avg30: r.avg30, low: r.low,
+  'trend-holo': holoField(r, 'trend'), 'avg-holo': holoField(r, 'avg'),
+  'avg1-holo': holoField(r, 'avg1'), 'avg7-holo': holoField(r, 'avg7'),
+  'avg30-holo': holoField(r, 'avg30'), 'low-holo': holoField(r, 'low')
+};
+
 const words = (s) =>
   String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, ' ').trim();
 
+const streamPipeline = promisify(pipeline);
+
+// Datei per Stream auf die Festplatte laden (spart RAM vs. kompletter In-Memory-Download)
+async function downloadToFile(url, destFile) {
+  const res = await axios.get(url, {
+    timeout: 120000,
+    responseType: 'stream',
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity
+  });
+  fs.mkdirSync(path.dirname(destFile), { recursive: true });
+  await streamPipeline(res.data, fs.createWriteStream(destFile));
+}
+
 async function loadJson(url, localFile) {
   if (url) {
-    const res = await axios.get(url, { timeout: 120000, maxContentLength: Infinity, responseType: 'json' });
-    return typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    const tmpFile = path.join(TMP_DIR, localFile.replace('.json', '-' + Date.now() + '.json'));
+    try {
+      await downloadToFile(url, tmpFile);
+      const content = fs.readFileSync(tmpFile, 'utf8');
+      try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+      return typeof content === 'string' ? JSON.parse(content) : content;
+    } catch (e) {
+      await sendDiscordAlert('cardmarket-download', `Cardmarket-Download fehlgeschlagen: ${localFile}`, e);
+      throw e;
+    }
   }
   const file = path.join(DATA_DIR, localFile);
   if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -78,20 +119,49 @@ async function refreshIfStale(maxAgeMs = 6 * 60 * 60 * 1000) {
 }
 
 async function doRefresh() {
+  let priceFile = null;
+  let productFile = null;
   try {
-    const [priceFile, productFile] = await Promise.all([
-      loadJson(PRICE_URL, 'price_guide.json'),
-      loadJson(PRODUCTS_URL, 'products_singles.json')
-    ]);
-    if (!priceFile || !productFile) {
-      meta.error = 'Keine Cardmarket-Dateien konfiguriert (CM_PRICE_GUIDE_URL / CM_PRODUCTS_URL oder data/*.json).';
+    // Nacheinander laden statt parallel, um den RAM-Gipfel niedrig zu halten
+    priceFile = await loadJson(PRICE_URL, 'price_guide.json');
+    if (!priceFile) {
+      meta.error = 'Keine Cardmarket-Price-Guide-Datei konfiguriert (CM_PRICE_GUIDE_URL oder data/price_guide.json).';
       return false;
     }
-    const built = build(priceFile, productFile);
-    index = built.list;
+
+    // Preis-Map bauen und Datum sichern, bevor Rohdaten freigegeben werden
+    const prices = new Map();
+    const priceGuideDate = priceFile.createdAt || null;
+    for (const r of priceFile.priceGuides || []) prices.set(r.idProduct, slim(r));
+    priceFile = null; // Rohdaten freigeben, bevor die Produktdatei geladen wird
+
+    productFile = await loadJson(PRODUCTS_URL, 'products_singles.json');
+    if (!productFile) {
+      meta.error = 'Keine Cardmarket-Produktdatei konfiguriert (CM_PRODUCTS_URL oder data/products_singles.json).';
+      return false;
+    }
+
+    // Index aufbauen – nur benötigte Felder pro Produkt behalten
+    const list = [];
+    for (const p of productFile.products || []) {
+      const base = String(p.name || '').split(/\s*[\[(]/)[0];
+      const br = String(p.name).match(/\[(.*)\]/);
+      const attacks = br ? br[1].split('|').map(a => words(a)).filter(Boolean) : [];
+      list.push({
+        id: p.idProduct,
+        name: p.name,
+        attacks,
+        baseWords: words(base),
+        expansionId: p.idExpansion,
+        price: prices.get(p.idProduct) || null
+      });
+    }
+    productFile = null; // Rohdaten freigeben
+
+    index = list;
     byId = new Map(index.map(p => [p.id, p]));
     meta.products = index.length;
-    meta.priceGuideDate = built.date;
+    meta.priceGuideDate = priceGuideDate;
     meta.loadedAt = new Date().toISOString();
     meta.error = null;
     loadExpansions();
@@ -101,7 +171,9 @@ async function doRefresh() {
       if (!byExpName.has(k)) byExpName.set(k, []);
       byExpName.get(k).push(p);
     }
-    console.log(`Cardmarket-Index geladen: ${index.length} Produkte (Price Guide ${built.date})`);
+    // Grosse Hilfsstrukturen freigeben
+    if (global.gc) global.gc();
+    console.log(`Cardmarket-Index geladen: ${index.length} Produkte (Price Guide ${meta.priceGuideDate})`);
     return true;
   } catch (e) {
     meta.error = e.message;

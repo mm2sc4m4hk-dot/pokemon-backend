@@ -3,9 +3,13 @@ const cors = require('cors');
 const axios = require('axios');
 const cardmarket = require('./cardmarket');
 const { scanCard } = require('./scanProviders');
+const { requireAuth } = require('./authMiddleware');
+const { sendDiscordAlert } = require('./discordAlert');
 
 const app = express();
 app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
+
+const startTime = Date.now();
 
 // CORS-Einstellungen
 const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
@@ -13,19 +17,24 @@ app.use(cors(allowedOrigins.length
   ? { origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)) }
   : undefined));
 
+// Scan nur mit gültigem Firebase-Login. Steht VOR express.json, damit unangemeldete Anfragen
+// gar nicht erst ihren (bis zu 10 MB großen) Body einlesen lassen.
+app.use('/api/scan-genai', requireAuth);
+
 // WICHTIG: Request-Body-Limit auf 10MB setzen, damit Base64-Kamerabilder verarbeitet werden können!
 app.use(express.json({ limit: '10mb' }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Kleines Rate-Limit ohne Zusatzpaket: max. N Anfragen pro Minute und IP
-function rateLimit(max, windowMs = 60 * 1000) {
+function rateLimit(max, windowMs = 60 * 1000, keyOf = (req) => req.ip) {
   const hits = new Map();
   setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k); }, windowMs).unref();
   return (req, res, next) => {
     const now = Date.now();
-    const h = hits.get(req.ip);
-    if (!h || h.resetAt <= now) { hits.set(req.ip, { count: 1, resetAt: now + windowMs }); return next(); }
+    const key = keyOf(req);
+    const h = hits.get(key);
+    if (!h || h.resetAt <= now) { hits.set(key, { count: 1, resetAt: now + windowMs }); return next(); }
     h.count += 1;
     if (h.count > max) {
       res.set('Retry-After', String(Math.ceil((h.resetAt - now) / 1000)));
@@ -37,7 +46,7 @@ function rateLimit(max, windowMs = 60 * 1000) {
 
 app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices', '/api/wantlist-names'], rateLimit(120));
 app.use('/api/img', rateLimit(600));
-app.use('/api/scan-genai', rateLimit(20));
+app.use('/api/scan-genai', rateLimit(20, 60 * 1000, (req) => (req.user && req.user.uid) || req.ip)); // pro Konto statt pro IP
 
 // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
 const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
@@ -48,7 +57,18 @@ cardmarket.init();
 app.get('/api/cardmarket-status', (req, res) => res.json(cardmarket.meta));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
+  const mem = process.memoryUsage();
+  res.json({
+    status: 'ok',
+    time: new Date().toISOString(),
+    uptime: Math.floor((Date.now() - startTime) / 1000),
+    memory: {
+      rss: Math.round(mem.rss / 1024 / 1024),   // MB
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024), // MB
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024) // MB
+    },
+    cardmarket: cardmarket.meta
+  });
 });
 
 // Bild-Proxy (nur TCGdex-Assets)
@@ -801,6 +821,22 @@ app.post('/api/wantlist-names', async (req, res) => {
 });
 
 require('./jobs')({ cardmarket, refreshOne, mapLimit }).registerRoutes(app);
+
+// ---------------------------------------------------------------------
+// Globaler Error-Handler: fängt nicht abgefangene Fehler ab und schickt
+// einen Discord-Alert (nicht blockierend), bevor die Antwort gesendet wird.
+// ---------------------------------------------------------------------
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err.message);
+  sendDiscordAlert('unhandled-error', `Unhandled error on ${req.method} ${req.originalUrl}`, err).catch(() => {});
+  res.status(500).json({ error: 'Interner Serverfehler' });
+});
+
+// Unhandled Promise Rejections ebenfalls an Discord melden
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  sendDiscordAlert('unhandled-rejection', 'Unhandled Promise Rejection', reason).catch(() => {});
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));

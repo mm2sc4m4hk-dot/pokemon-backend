@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------------
+    // Nutzerdaten: Jeder Nutzer darf NUR seine eigenen Dokumente lesen/schreiben.
+    // Pfad: users/{userId}/{collection}/{docId} (beliebige Tiefe)
+    // ---------------------------------------------------------------------
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ---------------------------------------------------------------------
+    // Share-Links (Freigabe per Link):
+    // - Einmaliges Lesen EINES Dokuments ist für JEDEN erlaubt (get).
+    // - LISTEN/QUERIES sind nur für den Besitzer erlaubt (SharePanel nutzt
+    //   where('uid','==',uid)).
+    // - create prüft request.resource (Dokument wird erst geschrieben), nicht
+    //   resource (noch nicht vorhanden).
+    // - parts nutzen getAfter, weil pushShare Meta und Parts in einem Batch
+    //   schreibt.
+    // ---------------------------------------------------------------------
+    match /shares/{shareId} {
+      allow get: if true;
+      allow list: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    match /shares/{shareId}/parts/{partId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if request.auth != null
+        && getAfter(/databases/$(database)/documents/shares/$(shareId)).data.uid == request.auth.uid;
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/shares/$(shareId)).data.uid == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------------------
+    // Globale Preisdaten (vom Server-Job gepflegt) – öffentlich lesen,
+    // list erlaubt für authentifizierte Nutzer (priceData.js nutzt 'in'-Abfrage).
+    // Schreiben nur serverseitig (Admin SDK umgeht Regeln).
+    // ---------------------------------------------------------------------
+    match /cardPrices/{cardId} {
+      allow get: if true;
+      allow list: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /cardHistory/{cardId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // Alles andere ist standardmäßig gesperrt.
+    // ---------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
