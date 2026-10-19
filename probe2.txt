@@ -1,0 +1,61 @@
+        return this.completionDeferred.promise;
+    }
+    /**
+     * Creates a query stream and attaches event handlers to it.
+     * @private
+     * @internal
+     */
+    setupStream() {
+        const stream = this.getAllDescendants(this.ref instanceof _1.CollectionReference
+            ? this.ref
+            : this.ref);
+        this.streamInProgress = true;
+        let streamedDocsCount = 0;
+        stream
+            .on('error', err => {
+            err.code = 14 /* StatusCode.UNAVAILABLE */;
+            err.stack = 'Failed to fetch children documents: ' + err.stack;
+            this.lastError = err;
+            this.onQueryEnd();
+        })
+            .on('data', (snap) => {
+            streamedDocsCount++;
+            this.lastDocumentSnap = snap;
+            this.deleteRef(snap.ref);
+        })
+            .on('end', () => {
+            this.streamInProgress = false;
+            // If there are fewer than the number of documents specified in the
+            // limit() field, we know that the query is complete.
+            if (streamedDocsCount < this.minPendingOps) {
+                this.onQueryEnd();
+            }
+            else if (this.pendingOpsCount === 0) {
+                this.setupStream();
+            }
+        });
+    }
+    /**
+     * Retrieves all descendant documents nested under the provided reference.
+     * @param ref The reference to fetch all descendants for.
+     * @private
+     * @internal
+     * @returns {Stream<QueryDocumentSnapshot>} Stream of descendant documents.
+     */
+    getAllDescendants(ref) {
+        // The parent is the closest ancestor document to the location we're
+        // deleting. If we are deleting a document, the parent is the path of that
+        // document. If we are deleting a collection, the parent is the path of the
+        // document containing that collection (or the database root, if it is a
+        // root collection).
+        let parentPath = ref._resourcePath;
+        if (ref instanceof _1.CollectionReference) {
+            parentPath = parentPath.popLast();
+        }
+        const collectionId = ref instanceof _1.CollectionReference
+            ? ref.id
+            : ref.parent.id;
+        let query = new _1.Query(this.firestore, query_options_1.QueryOptions.forKindlessAllDescendants(parentPath, collectionId, 
+        /* requireConsistency= */ false));
+        // Query for names only to fetch empty snapshots.
+        query = query.select(_1.FieldPath.documentId()).limit(this.maxPendingOps);

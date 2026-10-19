@@ -1,0 +1,105 @@
+316:   }));
+317:   return out;
+318: }
+319: 
+320: // ---------------------------------------------------------------------
+321: // NEUER GENAI SCANNER ENDPUNKT
+322: // ---------------------------------------------------------------------
+323: app.post('/api/scan-genai', async (req, res) => {
+324:   const t0 = Date.now();
+325:   let tAi = 0; let tSearch = 0;
+326:   try {
+327:     const { image } = req.body;
+328:     if (!image) {
+329:       return res.status(400).json({ error: 'Kein Bild übertragen.' });
+330:     }
+331: 
+332:     const base64Data = image.replace(/^data:image\/(png|jpeg|webp);base64,/, '');
+333: 
+334:     // Monatliches Scan-Kontingent reservieren (serverseitig, transaktional).
+335:     // Erst danach wird der (kostenpflichtige) KI-Anbieter angefragt.
+336:     try {
+337:       const quota = await reserveScan(req.user.uid);
+338:       res.set('X-Scan-Quota-Remaining', String(quota.remaining ?? 0));
+339:     } catch (e) {
+340:       if (e instanceof QuotaExceeded) {
+341:         console.log(`Scan-Kontingent erreicht (${e.scope}): ${req.user.uid}`);
+342:         return res.status(429).json({ error: e.message, code: 'quota_exceeded', scope: e.scope, ...(e.info || {}) });
+343:       }
+344:       throw e;
+345:     }
+346: 
+347:     const prompt = `Analysiere diese Pokémon-Sammelkarte präzise. 
+348: Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück mit folgenden Werten:
+349: - "name": Der exakte Name der Karte (in der Originalsprache der Karte, z.B. Charizard, Glurak, リザードン)
+350: - "number": Die Kartennummer/Collector-Number (z. B. "024/189", "024" oder "SWSH050")
+351: - "set": Name des Sets oder Set-Abkürzung falls erkennbar (sonst null)
+352: - "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")
+353: - "variant": Druckvariante, nur wenn du sie sicher erkennst, sonst null:
+354:     "reverse" = Folien-Glanz auf der ganzen Karte AUSSER im Bildfenster (das Artwork selbst ist matt, Rahmen/Hintergrund glitzert),
+355:     "holo" = Glitzer/Folie nur im Bildfenster (Artwork), Rahmen ist matt,
+356:     "normal" = keinerlei Folieneffekt.
+357:   Reflexe von Licht oder Blitz sind KEIN Holo. Bei Zweifel: null.`;
+358: 
+359:     // Mehrere Scan-Anbieter mit Fallback (siehe scanProviders.js).
+360:     // Schlägt der Anbieter komplett fehl, wird die Kontingent-Reservierung
+361:     // zurückgegeben – der Nutzer soll nicht für einen Serverfehler zahlen.
+362:     let parsedAiResult;
+363:     try {
+364:       parsedAiResult = await scanCard(base64Data, prompt);
+365:     } catch (e) {
+366:       await refundScan(req.user.uid);
+367:       throw e;
+368:     }
+369:     tAi = Date.now() - t0;
+370:     // Variante normalisieren: nur normal | reverse | holo | null
+371:     {
+372:       const raw = String(parsedAiResult.variant || '').toLowerCase().replace(/[^a-z]/g, '');
+373:       parsedAiResult.variant = raw === 'reverseholo' ? 'reverse' : (['normal', 'reverse', 'holo'].includes(raw) ? raw : null);
+374:     }
+375:     const cardName = parsedAiResult.name || '';
+376:     const cardNumber = parsedAiResult.number || '';
+377: 
+378:     if (!cardName && !cardNumber) {
+379:       return res.status(422).json({ 
+380:         error: 'Auf dem Bild konnte keine Karte erkannt werden.',
+381:         raw: parsedAiResult 
+382:       });
+383:     }
+384: 
+385:     const query = [cardName, cardNumber].filter(Boolean).join(' ');
+386:     const parsed = parseQuery(query);
+387:     
+388:     let idToLang = await collectIds(parsed, parsedAiResult.set || '', true);
+389:     if (idToLang.size === 0 && parsed.number) {
+390:       idToLang = await collectIds(parsed, parsedAiResult.set || '', false);
+391:     }
+392: 
+393:     let results = [];
+394:     if (idToLang.size > 0) {
+395:       const entries = Array.from(idToLang.entries()).slice(0, 8);
+396:       const detailed = await Promise.all(
+397:         entries.map(async ([id, lang]) => {
+398:           try { return await fetchDetail(lang, id); } catch (e) { return null; }
+399:         })
+400:       );
+401:       results = detailed.filter(Boolean);
+402:       tSearch = Date.now() - t0 - tAi;
+403:       results = await mapLimit(results, 8, (c) => enrichWithCardmarket(c, 3000));
+404:     } else {
+405:       tSearch = Date.now() - t0 - tAi;
+406:       results = cardmarket.search(parsed.name);
+407:     }
+408:     console.log(`Scan: Erkennung ${tAi} ms, Suche ${tSearch} ms, Preise ${Date.now() - t0 - tAi - tSearch} ms, gesamt ${Date.now() - t0} ms, ${results.length} Treffer`);
+409: 
+410:     res.json({
+411:       aiAnalysis: parsedAiResult,
+412:       query,
+413:       results
+414:     });
+415: 
+416:   } catch (error) {
+417:     console.error('Fehler beim Scan:', error);
+418:     if (error.geminiBusy) {
+419:       return res.status(503).json({ error: 'Der Scan ist aktuell ausgelastet. Bitte versuche es in wenigen Sekunden erneut.' });
+420:     }

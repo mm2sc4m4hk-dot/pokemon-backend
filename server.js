@@ -5,6 +5,8 @@ const cardmarket = require('./cardmarket');
 const { scanCard } = require('./scanProviders');
 const { requireAuth } = require('./authMiddleware');
 const { sendDiscordAlert } = require('./discordAlert');
+const { reserveScan, refundScan, QuotaExceeded } = require('./scanQuota');
+const { registerAccountRoutes } = require('./accountRoutes');
 
 const app = express();
 app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
@@ -61,6 +63,9 @@ function rateLimit(max, windowMs = 60 * 1000, keyOf = (req) => req.ip) {
 app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices', '/api/wantlist-names'], rateLimit(120));
 app.use('/api/img', rateLimit(600));
 app.use('/api/scan-genai', rateLimit(20, 60 * 1000, (req) => (req.user && req.user.uid) || req.ip)); // pro Konto statt pro IP
+
+// Kontingent-Anzeige und Account-Löschung (eigene Routen, mit Login geschützt)
+registerAccountRoutes(app);
 
 // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
 const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
@@ -326,6 +331,19 @@ app.post('/api/scan-genai', async (req, res) => {
 
     const base64Data = image.replace(/^data:image\/(png|jpeg|webp);base64,/, '');
 
+    // Monatliches Scan-Kontingent reservieren (serverseitig, transaktional).
+    // Erst danach wird der (kostenpflichtige) KI-Anbieter angefragt.
+    try {
+      const quota = await reserveScan(req.user.uid);
+      res.set('X-Scan-Quota-Remaining', String(quota.remaining ?? 0));
+    } catch (e) {
+      if (e instanceof QuotaExceeded) {
+        console.log(`Scan-Kontingent erreicht (${e.scope}): ${req.user.uid}`);
+        return res.status(429).json({ error: e.message, code: 'quota_exceeded', scope: e.scope, ...(e.info || {}) });
+      }
+      throw e;
+    }
+
     const prompt = `Analysiere diese Pokémon-Sammelkarte präzise. 
 Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück mit folgenden Werten:
 - "name": Der exakte Name der Karte (in der Originalsprache der Karte, z.B. Charizard, Glurak, リザードン)
@@ -338,8 +356,16 @@ Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück m
     "normal" = keinerlei Folieneffekt.
   Reflexe von Licht oder Blitz sind KEIN Holo. Bei Zweifel: null.`;
 
-    // Mehrere Scan-Anbieter mit Fallback (siehe scanProviders.js)
-    const parsedAiResult = await scanCard(base64Data, prompt);
+    // Mehrere Scan-Anbieter mit Fallback (siehe scanProviders.js).
+    // Schlägt der Anbieter komplett fehl, wird die Kontingent-Reservierung
+    // zurückgegeben – der Nutzer soll nicht für einen Serverfehler zahlen.
+    let parsedAiResult;
+    try {
+      parsedAiResult = await scanCard(base64Data, prompt);
+    } catch (e) {
+      await refundScan(req.user.uid);
+      throw e;
+    }
     tAi = Date.now() - t0;
     // Variante normalisieren: nur normal | reverse | holo | null
     {

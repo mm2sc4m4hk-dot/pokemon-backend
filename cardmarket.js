@@ -107,7 +107,9 @@ async function streamArray(url, localFile, arrayKey, onItem) {
           if (depth === 1 && c === '[') {
             const m = /"([^"]*)"\s*:\s*$/.exec(rootBuf);
             curKey = m ? m[1] : null;
-            rootBuf = '';
+            // rootBuf NICHT leeren: Cardmarket schreibt "createdAt" VOR das
+            // Array. Top-Level-Werte (Strings/Zahlen) sind klein, deshalb
+            // bleibt der Puffer unkritisch für den Speicher.
           }
           if (depth === 2 && c === '{' && curKey === arrayKey) { itemStart = i; item = ''; }
           depth += 1;

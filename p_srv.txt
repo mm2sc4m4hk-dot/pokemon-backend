@@ -1,0 +1,882 @@
+0: const express = require('express');
+1: const cors = require('cors');
+2: const axios = require('axios');
+3: const cardmarket = require('./cardmarket');
+4: const { scanCard } = require('./scanProviders');
+5: const { requireAuth } = require('./authMiddleware');
+6: const { sendDiscordAlert } = require('./discordAlert');
+7: const { reserveScan, refundScan, QuotaExceeded } = require('./scanQuota');
+8: const { registerAccountRoutes } = require('./accountRoutes');
+9: 
+10: const app = express();
+11: app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
+12: 
+13: const startTime = Date.now();
+14: 
+15: // CORS-Einstellungen
+16: // Erlaubte Origins kommen aus ALLOWED_ORIGINS (Render-Umgebungsvariable, kommagetrennt).
+17: // Ist sie nicht gesetzt, gilt die Default-Liste – sonst blockt der Browser die Requests
+18: // der neuen Domain (https://tcg-vault-blond.vercel.app) sofort mit einem CORS-Fehler.
+19: const DEFAULT_ORIGINS = [
+20:   'https://tcg-vault-blond.vercel.app',       // aktuelle Domain
+21:   'https://pokemon-frontend-blond.vercel.app', // alte Domain (Alias, bleibt erhalten)
+22:   'http://localhost:5173',                     // lokale Entwicklung (Vite Dev Server)
+23:   'http://localhost:4173',                     // lokale Entwicklung (Vite Preview)
+24:   'http://localhost:3000'
+25: ];
+26: const envOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
+27: const useDefaults = envOrigins.length === 0;
+28: const allowedOrigins = useDefaults ? DEFAULT_ORIGINS : envOrigins;
+29: // Vercel-Preview-Deployments (*.vercel.app) nur im Default-Modus zulassen, damit
+30: // Test-Deploys funktionieren. Mit gesetzter ALLOWED_ORIGINS gilt die exakte Liste.
+31: const isAllowedOrigin = (origin) =>
+32:   allowedOrigins.includes(origin) || (useDefaults && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin));
+33: app.use(cors({ origin: (origin, cb) => cb(null, !origin || isAllowedOrigin(origin)) }));
+34: 
+35: // Scan nur mit gültigem Firebase-Login. Steht VOR express.json, damit unangemeldete Anfragen
+36: // gar nicht erst ihren (bis zu 10 MB großen) Body einlesen lassen.
+37: app.use('/api/scan-genai', requireAuth);
+38: 
+39: // WICHTIG: Request-Body-Limit auf 10MB setzen, damit Base64-Kamerabilder verarbeitet werden können!
+40: app.use(express.json({ limit: '10mb' }));
+41: 
+42: const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+43: 
+44: // Kleines Rate-Limit ohne Zusatzpaket: max. N Anfragen pro Minute und IP
+45: function rateLimit(max, windowMs = 60 * 1000, keyOf = (req) => req.ip) {
+46:   const hits = new Map();
+47:   setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k); }, windowMs).unref();
+48:   return (req, res, next) => {
+49:     const now = Date.now();
+50:     const key = keyOf(req);
+51:     const h = hits.get(key);
+52:     if (!h || h.resetAt <= now) { hits.set(key, { count: 1, resetAt: now + windowMs }); return next(); }
+53:     h.count += 1;
+54:     if (h.count > max) {
+55:       res.set('Retry-After', String(Math.ceil((h.resetAt - now) / 1000)));
+56:       return res.status(429).json({ error: 'Zu viele Anfragen. Bitte kurz warten.' });
+57:     }
+58:     next();
+59:   };
+60: }
+61: 
+62: app.use(['/api/cards', '/api/card', '/api/card-meta', '/api/prices', '/api/wantlist-names'], rateLimit(120));
+63: app.use('/api/img', rateLimit(600));
+64: app.use('/api/scan-genai', rateLimit(20, 60 * 1000, (req) => (req.user && req.user.uid) || req.ip)); // pro Konto statt pro IP
+65: 
+66: // Kontingent-Anzeige und Account-Löschung (eigene Routen, mit Login geschützt)
+67: registerAccountRoutes(app);
+68: 
+69: // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
+70: const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
+71: 
+72: // Zweite Datenquelle (Cardmarket-Dateien) im Hintergrund laden und täglich erneuern
+73: cardmarket.init();
+74: 
+75: app.get('/api/cardmarket-status', (req, res) => res.json(cardmarket.meta));
+76: 
+77: app.get('/api/health', (req, res) => {
+78:   const mem = process.memoryUsage();
+79:   res.json({
+80:     status: 'ok',
+81:     time: new Date().toISOString(),
+82:     uptime: Math.floor((Date.now() - startTime) / 1000),
+83:     memory: {
+84:       rss: Math.round(mem.rss / 1024 / 1024),   // MB
+85:       heapUsed: Math.round(mem.heapUsed / 1024 / 1024), // MB
+86:       heapTotal: Math.round(mem.heapTotal / 1024 / 1024) // MB
+87:     },
+88:     cardmarket: cardmarket.meta
+89:   });
+90: });
+91: 
+92: // Bild-Proxy (nur TCGdex-Assets)
+93: app.get('/api/img', async (req, res) => {
+94:   try {
+95:     const u = new URL(String(req.query.u || ''));
+96:     if (u.protocol !== 'https:' || u.hostname !== 'assets.tcgdex.net') return res.status(400).end();
+97:     const r = await axios.get(u.toString(), { responseType: 'arraybuffer', timeout: 15000 });
+98:     res.set('Content-Type', r.headers['content-type'] || 'image/webp');
+99:     res.set('Cache-Control', 'public, max-age=86400');
+100:     res.send(Buffer.from(r.data));
+101:   } catch (e) {
+102:     res.status(502).end();
+103:   }
+104: });
+105: 
+106: function parseQuery(raw) {
+107:   const tokens = raw.trim().replace(/#/g, ' ').split(/\s+/).filter(Boolean);
+108:   if (tokens.length >= 2) {
+109:     const last = tokens[tokens.length - 1];
+110:     const m = last.match(/^([A-Za-z]{0,4})(\d{1,3})([A-Za-z]?)(?:\/([A-Za-z]{0,4}\d{1,3}))?$/);
+111:     if (m) {
+112:       return {
+113:         name: tokens.slice(0, -1).join(' '),
+114:         number: {
+115:           prefix: m[1].toUpperCase(),
+116:           digits: String(parseInt(m[2], 10)),
+117:           suffix: m[3].toLowerCase(),
+118:           total: m[4] ? String(parseInt(m[4].replace(/\D/g, ''), 10)) : null
+119:         }
+120:       };
+121:     }
+122:   }
+123:   return { name: tokens.join(' '), number: null };
+124: }
+125: 
+126: function splitLocalId(localId) {
+127:   const m = String(localId || '').match(/^([A-Za-z]*)(\d+)([A-Za-z]?)$/);
+128:   if (!m) return null;
+129:   return { prefix: m[1].toUpperCase(), digits: String(parseInt(m[2], 10)), suffix: m[3].toLowerCase() };
+130: }
+131: 
+132: function matchesNumber(localId, number) {
+133:   const parts = splitLocalId(localId);
+134:   if (!parts) return false;
+135:   return parts.digits === number.digits && parts.prefix === number.prefix && parts.suffix === (number.suffix || '');
+136: }
+137: 
+138: function normalizeCard(card, lang) {
+139:   const img = card.image ? `${card.image}/high.webp` : '';
+140:   const imgSmall = card.image ? `${card.image}/low.webp` : '';
+141:   const cm = card.pricing?.cardmarket || {};
+142: 
+143:   return {
+144:     id: card.id,
+145:     name: card.name,
+146:     number: card.localId || null,
+147:     images: { small: imgSmall || img, large: img },
+148:     attacks: (card.attacks || []).map(a => a.name).filter(Boolean),
+149:     set: {
+150:       id: card.set?.id || null,
+151:       name: card.set?.name || null,
+152:       total: card.set?.cardCount?.official ?? null
+153:     },
+154:     variants: card.variants || null,
+155:     dexId: Array.isArray(card.dexId) ? card.dexId.map(Number).filter(Number.isFinite) : [],
+156:     illustrator: card.illustrator || null,
+157:     cardmarket: {
+158:       url: `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(
+159:         [card.name, card.localId].filter(Boolean).join(' ')
+160:       )}`,
+161:       prices: {
+162:         trendPrice: cm.trend ?? cm.avg ?? 0,
+163:         averageSellPrice: cm.avg ?? 0,
+164:         avg1: cm.avg1 ?? 0,
+165:         avg7: cm.avg7 ?? 0,
+166:         avg30: cm.avg30 ?? 0,
+167:         low: cm.low ?? 0,
+168:         trendPriceHolo: cm['trend-holo'] ?? cm['avg-holo'] ?? 0,
+169:         avg1Holo: cm['avg1-holo'] ?? 0,
+170:         avg7Holo: cm['avg7-holo'] ?? 0,
+171:         avg30Holo: cm['avg30-holo'] ?? 0,
+172:         lowHolo: cm['low-holo'] ?? 0
+173:       }
+174:     },
+175:     _lang: lang
+176:   };
+177: }
+178: 
+179: function nameVariants(name) {
+180:   const variants = [name];
+181:   const hyphenated = name.replace(/\s+(GX|EX|V|VMAX|VSTAR|VUNION|ex)$/i, '-$1');
+182:   if (hyphenated !== name) variants.push(hyphenated);
+183:   return variants;
+184: }
+185: 
+186: async function searchBriefs(lang, name, set, numberDigits, perPage) {
+187:   try {
+188:     const params = new URLSearchParams();
+189:     params.set('name', name);
+190:     if (numberDigits) params.set('localId', numberDigits);
+191:     if (set) params.set('set.name', `like:${set}`);
+192:     params.set('pagination:itemsPerPage', String(perPage));
+193: 
+194:     const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards?${params.toString()}`, { timeout: 10000 });
+195:     return Array.isArray(res.data) ? res.data : [];
+196:   } catch (e) {
+197:     console.error(`TCGdex Brief-Suche (${lang}) fehlgeschlagen:`, e.response?.status || e.message);
+198:     return [];
+199:   }
+200: }
+201: 
+202: async function fetchDetail(lang, id) {
+203:   const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${id}`, { timeout: 10000 });
+204:   const normalized = normalizeCard(res.data, lang);
+205: 
+206:   if (!normalized.images.small && lang !== 'en') {
+207:     try {
+208:       const enRes = await axios.get(`${TCGDEX_BASE}/en/cards/${id}`, { timeout: 10000 });
+209:       const enNormalized = normalizeCard(enRes.data, 'en');
+210:       normalized.images = enNormalized.images;
+211:     } catch (e) {}
+212:   }
+213: 
+214:   return normalized;
+215: }
+216: 
+217: async function collectIds(parsed, set, useServerNumberFilter) {
+218:   const perPage = parsed.number ? 100 : 48;
+219:   const numberDigits = parsed.number && useServerNumberFilter ? parsed.number.digits : null;
+220: 
+221:   const variants = nameVariants(parsed.name);
+222:   const lists = await Promise.all(
+223:     ['de', 'en'].map(async (lang) =>
+224:       (await Promise.all(variants.map(v => searchBriefs(lang, v, set, numberDigits, perPage)))).flat()
+225:     )
+226:   );
+227:   const [deBriefs, enBriefs] = lists;
+228: 
+229:   const promoMatch = (b) => {
+230:     const n = parsed.number;
+231:     if (!n || !n.prefix) return false;
+232:     if (!String(b.id || '').toLowerCase().startsWith(`${n.prefix.toLowerCase()}-`)) return false;
+233:     const p = splitLocalId(b.localId);
+234:     return !!p && p.prefix === '' && p.digits === n.digits && p.suffix === (n.suffix || '');
+235:   };
+236:   const keep = (b) => !parsed.number || matchesNumber(b.localId, parsed.number) || promoMatch(b);
+237: 
+238:   const idToLang = new Map();
+239:   deBriefs.filter(keep).forEach(b => idToLang.set(b.id, 'de'));
+240:   enBriefs.filter(keep).forEach(b => { if (!idToLang.has(b.id)) idToLang.set(b.id, 'en'); });
+241:   return idToLang;
+242: }
+243: 
+244: const englishCache = new Map();
+245: async function getEnglish(card) {
+246:   if (card._lang === 'en') return { name: card.name, attacks: card.attacks || [] };
+247:   if (englishCache.has(card.id)) return englishCache.get(card.id);
+248:   const res = await axios.get(`${TCGDEX_BASE}/en/cards/${card.id}`, { timeout: 10000 });
+249:   const en = { name: res.data.name, attacks: (res.data.attacks || []).map(a => a.name).filter(Boolean) };
+250:   if (englishCache.size > 5000) englishCache.clear();
+251:   englishCache.set(card.id, en);
+252:   return en;
+253: }
+254: 
+255: const setAbbrCache = new Map();
+256: async function getSetAbbr(setId) {
+257:   if (!setId) return null;
+258:   if (setAbbrCache.has(setId)) return setAbbrCache.get(setId);
+259:   try {
+260:     const r = await axios.get(`${TCGDEX_BASE}/en/sets/${encodeURIComponent(setId)}`, { timeout: 10000 });
+261:     const abbr = r.data?.abbreviation?.official || null;
+262:     setAbbrCache.set(setId, abbr);
+263:     return abbr;
+264:   } catch (e) {
+265:     return null;
+266:   }
+267: }
+268: 
+269: const padNumber = (n) => (/^\d+$/.test(String(n)) ? String(n).padStart(3, '0') : String(n));
+270: 
+271: async function withCmLink(card) {
+272:   try {
+273:     if (!card.number || !card.set?.id) return card;
+274:     const abbr = await getSetAbbr(card.set.id);
+275:     if (!abbr) return card;
+276:     const en = await getEnglish(card);
+277:     const q = `${en.name} (${abbr} ${padNumber(card.number)})`;
+278:     return {
+279:       ...card,
+280:       cardmarket: {
+281:         ...card.cardmarket,
+282:         url: `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(q)}`
+283:       }
+284:     };
+285:   } catch (e) {
+286:     return card;
+287:   }
+288: }
+289: 
+290: async function enrichPrices(card, maxWaitMs = 0) {
+291:   try {
+292:     // maxWaitMs > 0: nicht länger auf die (große) Cardmarket-Datei warten, dann gelten die TCGdex-Preise
+293:     if (maxWaitMs > 0) await Promise.race([cardmarket.ready(), sleep(maxWaitMs)]);
+294:     else await cardmarket.ready();
+295:     const setId = card.set?.id;
+296:     if (!setId || !cardmarket.hasSet(setId)) return card;
+297:     const en = await getEnglish(card);
+298:     const cands = cardmarket.candidates(setId, en.name);
+299:     if (cands.length === 0) return card;
+300:     const product = cands.length === 1 ? cands[0] : cardmarket.pickByAttacks(cands, en.attacks);
+301:     return product ? cardmarket.applyProduct(card, product) : card;
+302:   } catch (e) {
+303:     return card;
+304:   }
+305: }
+306: 
+307: async function enrichWithCardmarket(card, maxWaitMs = 0) {
+308:   return withCmLink(await enrichPrices(card, maxWaitMs));
+309: }
+310: 
+311: async function mapLimit(items, limit, fn) {
+312:   const out = new Array(items.length); let i = 0;
+313:   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+314:     while (i < items.length) { const n = i++; out[n] = await fn(items[n]); }
+315:   }));
+316:   return out;
+317: }
+318: 
+319: // ---------------------------------------------------------------------
+320: // NEUER GENAI SCANNER ENDPUNKT
+321: // ---------------------------------------------------------------------
+322: app.post('/api/scan-genai', async (req, res) => {
+323:   const t0 = Date.now();
+324:   let tAi = 0; let tSearch = 0;
+325:   try {
+326:     const { image } = req.body;
+327:     if (!image) {
+328:       return res.status(400).json({ error: 'Kein Bild übertragen.' });
+329:     }
+330: 
+331:     const base64Data = image.replace(/^data:image\/(png|jpeg|webp);base64,/, '');
+332: 
+333:     // Monatliches Scan-Kontingent reservieren (serverseitig, transaktional).
+334:     // Erst danach wird der (kostenpflichtige) KI-Anbieter angefragt.
+335:     try {
+336:       const quota = await reserveScan(req.user.uid);
+337:       res.set('X-Scan-Quota-Remaining', String(quota.remaining ?? 0));
+338:     } catch (e) {
+339:       if (e instanceof QuotaExceeded) {
+340:         console.log(`Scan-Kontingent erreicht (${e.scope}): ${req.user.uid}`);
+341:         return res.status(429).json({ error: e.message, code: 'quota_exceeded', scope: e.scope, ...(e.info || {}) });
+342:       }
+343:       throw e;
+344:     }
+345: 
+346:     const prompt = `Analysiere diese Pokémon-Sammelkarte präzise. 
+347: Gib ausschließlich ein valides JSON-Objekt ohne Markdown-Formatierung zurück mit folgenden Werten:
+348: - "name": Der exakte Name der Karte (in der Originalsprache der Karte, z.B. Charizard, Glurak, リザードン)
+349: - "number": Die Kartennummer/Collector-Number (z. B. "024/189", "024" oder "SWSH050")
+350: - "set": Name des Sets oder Set-Abkürzung falls erkennbar (sonst null)
+351: - "language": Die Sprache der Karte ("de", "en", "ja", "ko", "zh")
+352: - "variant": Druckvariante, nur wenn du sie sicher erkennst, sonst null:
+353:     "reverse" = Folien-Glanz auf der ganzen Karte AUSSER im Bildfenster (das Artwork selbst ist matt, Rahmen/Hintergrund glitzert),
+354:     "holo" = Glitzer/Folie nur im Bildfenster (Artwork), Rahmen ist matt,
+355:     "normal" = keinerlei Folieneffekt.
+356:   Reflexe von Licht oder Blitz sind KEIN Holo. Bei Zweifel: null.`;
+357: 
+358:     // Mehrere Scan-Anbieter mit Fallback (siehe scanProviders.js).
+359:     // Schlägt der Anbieter komplett fehl, wird die Kontingent-Reservierung
+360:     // zurückgegeben – der Nutzer soll nicht für einen Serverfehler zahlen.
+361:     let parsedAiResult;
+362:     try {
+363:       parsedAiResult = await scanCard(base64Data, prompt);
+364:     } catch (e) {
+365:       await refundScan(req.user.uid);
+366:       throw e;
+367:     }
+368:     tAi = Date.now() - t0;
+369:     // Variante normalisieren: nur normal | reverse | holo | null
+370:     {
+371:       const raw = String(parsedAiResult.variant || '').toLowerCase().replace(/[^a-z]/g, '');
+372:       parsedAiResult.variant = raw === 'reverseholo' ? 'reverse' : (['normal', 'reverse', 'holo'].includes(raw) ? raw : null);
+373:     }
+374:     const cardName = parsedAiResult.name || '';
+375:     const cardNumber = parsedAiResult.number || '';
+376: 
+377:     if (!cardName && !cardNumber) {
+378:       return res.status(422).json({ 
+379:         error: 'Auf dem Bild konnte keine Karte erkannt werden.',
+380:         raw: parsedAiResult 
+381:       });
+382:     }
+383: 
+384:     const query = [cardName, cardNumber].filter(Boolean).join(' ');
+385:     const parsed = parseQuery(query);
+386:     
+387:     let idToLang = await collectIds(parsed, parsedAiResult.set || '', true);
+388:     if (idToLang.size === 0 && parsed.number) {
+389:       idToLang = await collectIds(parsed, parsedAiResult.set || '', false);
+390:     }
+391: 
+392:     let results = [];
+393:     if (idToLang.size > 0) {
+394:       const entries = Array.from(idToLang.entries()).slice(0, 8);
+395:       const detailed = await Promise.all(
+396:         entries.map(async ([id, lang]) => {
+397:           try { return await fetchDetail(lang, id); } catch (e) { return null; }
+398:         })
+399:       );
+400:       results = detailed.filter(Boolean);
+401:       tSearch = Date.now() - t0 - tAi;
+402:       results = await mapLimit(results, 8, (c) => enrichWithCardmarket(c, 3000));
+403:     } else {
+404:       tSearch = Date.now() - t0 - tAi;
+405:       results = cardmarket.search(parsed.name);
+406:     }
+407:     console.log(`Scan: Erkennung ${tAi} ms, Suche ${tSearch} ms, Preise ${Date.now() - t0 - tAi - tSearch} ms, gesamt ${Date.now() - t0} ms, ${results.length} Treffer`);
+408: 
+409:     res.json({
+410:       aiAnalysis: parsedAiResult,
+411:       query,
+412:       results
+413:     });
+414: 
+415:   } catch (error) {
+416:     console.error('Fehler beim Scan:', error);
+417:     if (error.geminiBusy) {
+418:       return res.status(503).json({ error: 'Der Scan ist aktuell ausgelastet. Bitte versuche es in wenigen Sekunden erneut.' });
+419:     }
+420:     res.status(500).json({ error: 'Scan fehlgeschlagen: ' + error.message });
+421:   }
+422: });
+423: 
+424: // ---------------------------------------------------------------------
+425: // WEITERE API ROUTEN
+426: // ---------------------------------------------------------------------
+427: let setsListCache = { at: 0, list: [] };
+428: app.get('/api/sets-list', async (req, res) => {
+429:   try {
+430:     if (!setsListCache.list.length || Date.now() - setsListCache.at > 6 * 60 * 60 * 1000) {
+431:       const r = await axios.get(`${TCGDEX_BASE}/en/sets`, { timeout: 20000 });
+432:       const list = (Array.isArray(r.data) ? r.data : []).map((s) => ({
+433:         id: s.id,
+434:         name: s.name,
+435:         total: s.cardCount?.total ?? s.cardCount?.official ?? 0
+436:       }));
+437:       setsListCache = { at: Date.now(), list };
+438:     }
+439:     res.json(setsListCache.list);
+440:   } catch (e) {
+441:     res.status(502).json({ error: 'Set-Liste konnte nicht geladen werden.' });
+442:   }
+443: });
+444: 
+445: app.get('/api/sets/:id', async (req, res) => {
+446:   try {
+447:     const r = await axios.get(`${TCGDEX_BASE}/en/sets/${encodeURIComponent(req.params.id)}`, { timeout: 15000 });
+448:     const d = r.data || {};
+449:     res.json({
+450:       id: d.id,
+451:       name: d.name,
+452:       total: d.cardCount?.official ?? null,
+453:       cards: (d.cards || []).map(c => ({
+454:         id: c.id,
+455:         localId: c.localId,
+456:         name: c.name,
+457:         image: c.image ? `${c.image}/low.webp` : ''
+458:       }))
+459:     });
+460:   } catch (e) {
+461:     const status = e.response?.status === 404 ? 404 : 502;
+462:     res.status(status).json({ error: 'Set konnte nicht geladen werden.' });
+463:   }
+464: });
+465: 
+466: const priceCache = new Map();
+467: const PRICE_TTL_MS = 12 * 60 * 60 * 1000;
+468: 
+469: async function refreshOne(id, force = false) {
+470:   const hit = priceCache.get(id);
+471:   if (!force && hit && hit.date === (cardmarket.meta.priceGuideDate || null) && Date.now() - hit.at < PRICE_TTL_MS) return hit.data;
+472: 
+473:   let data = null;
+474:   if (id.startsWith('cm-')) {
+475:     data = cardmarket.pricesOfProduct(Number(id.slice(3)));
+476:   } else if (!id.startsWith('custom-')) {
+477:     let card = null;
+478:     for (const lang of ['en', 'de']) {
+479:       try { card = await fetchDetail(lang, id); break; } catch (e) {}
+480:     }
+481:     if (card) {
+482:       card = await enrichPrices(card);
+483:       data = {
+484:         prices: card.cardmarket.prices,
+485:         productId: card.cardmarket.productId || null,
+486:         priceSource: card.cardmarket.priceSource || 'tcgdex',
+487:         priceDate: card.cardmarket.priceDate || null
+488:       };
+489:     }
+490:   }
+491:   if (data) {
+492:     if (priceCache.size > 8000) priceCache.clear();
+493:     priceCache.set(id, { at: Date.now(), date: cardmarket.meta.priceGuideDate || null, data });
+494:   }
+495:   return data;
+496: }
+497: 
+498: app.post('/api/prices', async (req, res) => {
+499:   try {
+500:     const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+501:     const ids = [...new Set(raw.map(String))].slice(0, 60);
+502:     if (ids.length === 0) return res.status(400).json({ error: 'ids fehlen' });
+503: 
+504:     const prices = {};
+505:     await mapLimit(ids, 6, async (id) => {
+506:       try {
+507:         const d = await refreshOne(id);
+508:         if (d) prices[id] = d;
+509:       } catch (e) {}
+510:     });
+511:     res.json({ prices, priceGuideDate: cardmarket.meta.priceGuideDate });
+512:   } catch (e) {
+513:     console.error('Preis-Refresh Fehler:', e.message);
+514:     res.status(500).json({ error: 'Preise konnten nicht aktualisiert werden.' });
+515:   }
+516: });
+517: 
+518: const DAY_MS = 24 * 60 * 60 * 1000;
+519: 
+520: let setsIndex = { at: 0, names: new Map(), order: new Map() };
+521: async function getSetsIndex() {
+522:   if (setsIndex.names.size && Date.now() - setsIndex.at < 6 * 60 * 60 * 1000) return setsIndex;
+523:   
+524:   const [deRes, enRes] = await Promise.all([
+525:     axios.get(`${TCGDEX_BASE}/de/sets`, { timeout: 20000 }).catch(() => ({ data: [] })),
+526:     axios.get(`${TCGDEX_BASE}/en/sets`, { timeout: 20000 }).catch(() => ({ data: [] }))
+527:   ]);
+528: 
+529:   const names = new Map();
+530:   const order = new Map();
+531: 
+532:   const deList = Array.isArray(deRes.data) ? deRes.data : [];
+533:   const enList = Array.isArray(enRes.data) ? enRes.data : [];
+534: 
+535:   enList.forEach((s, i) => {
+536:     if (s && s.id) {
+537:       names.set(s.id, s.name);
+538:       order.set(s.id, i);
+539:     }
+540:   });
+541: 
+542:   deList.forEach((s, i) => {
+543:     if (s && s.id) {
+544:       if (s.name) names.set(s.id, s.name);
+545:       if (!order.has(s.id)) order.set(s.id, i);
+546:     }
+547:   });
+548: 
+549:   setsIndex = { at: Date.now(), names, order };
+550:   return setsIndex;
+551: }
+552: 
+553: function briefsToCards(briefs, idx) {
+554:   const num = (v) => parseInt(String(v).replace(/\D/g, ''), 10);
+555:   return (briefs || []).filter((b) => b && b.id).map((b) => {
+556:     const i = b.id.lastIndexOf('-');
+557:     const setId = i > 0 ? b.id.slice(0, i) : b.id;
+558:     return {
+559:       id: b.id,
+560:       localId: b.localId,
+561:       name: b.name,
+562:       image: b.image ? `${b.image}/low.webp` : '',
+563:       setId,
+564:       setName: idx.names.get(setId) || setId,
+565:       setOrder: idx.order.has(setId) ? idx.order.get(setId) : 99999
+566:     };
+567:   }).sort((a, b) =>
+568:     a.setOrder - b.setOrder || a.setId.localeCompare(b.setId) ||
+569:     ((num(a.localId) || 0) - (num(b.localId) || 0)) || String(a.localId).localeCompare(String(b.localId))
+570:   );
+571: }
+572: 
+573: let illustratorCache = { at: 0, list: [] };
+574: app.get('/api/illustrators', async (req, res) => {
+575:   try {
+576:     if (!illustratorCache.list.length || Date.now() - illustratorCache.at > DAY_MS) {
+577:       const [deRes, enRes] = await Promise.all([
+578:         axios.get(`${TCGDEX_BASE}/de/illustrators`, { timeout: 20000 }).catch(() => ({ data: [] })),
+579:         axios.get(`${TCGDEX_BASE}/en/illustrators`, { timeout: 20000 }).catch(() => ({ data: [] }))
+580:       ]);
+581: 
+582:       const rawDe = Array.isArray(deRes.data) ? deRes.data : [];
+583:       const rawEn = Array.isArray(enRes.data) ? enRes.data : [];
+584: 
+585:       const set = new Set();
+586:       [...rawDe, ...rawEn].forEach((x) => {
+587:         const name = typeof x === 'string' ? x : x && x.name;
+588:         if (name) set.add(name.trim());
+589:       });
+590: 
+591:       const list = Array.from(set).sort((a, b) => a.localeCompare(b));
+592:       illustratorCache = { at: Date.now(), list };
+593:     }
+594:     res.json(illustratorCache.list);
+595:   } catch (e) {
+596:     console.error('Illustrator-Liste:', e.response?.status || e.message);
+597:     res.status(502).json({ error: 'Artist-Liste konnte nicht geladen werden.' });
+598:   }
+599: });
+600: 
+601: app.get('/api/illustrators/:name', async (req, res) => {
+602:   try {
+603:     const r = await axios.get(`${TCGDEX_BASE}/en/illustrators/${encodeURIComponent(req.params.name)}`, { timeout: 25000 });
+604:     const idx = await getSetsIndex().catch(() => ({ names: new Map(), order: new Map() }));
+605:     const cards = briefsToCards(r.data && r.data.cards, idx);
+606:     if (cards.length === 0) return res.status(404).json({ error: 'Keine Karten für diesen Artist.' });
+607:     res.json({ name: (r.data && r.data.name) || req.params.name, cards });
+608:   } catch (e) {
+609:     const status = e.response?.status === 404 ? 404 : 502;
+610:     res.status(status).json({ error: status === 404 ? 'Artist nicht gefunden.' : 'Artist konnte nicht geladen werden.' });
+611:   }
+612: });
+613: 
+614: app.get('/api/dex/:id', async (req, res) => {
+615:   try {
+616:     const id = parseInt(req.params.id, 10);
+617:     if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'Ungültige Pokédex-Nummer.' });
+618: 
+619:     const [deRes, enRes, idx] = await Promise.all([
+620:       axios.get(`${TCGDEX_BASE}/de/dex-ids/${id}`, { timeout: 25000 }).catch(() => ({ data: { cards: [] } })),
+621:       axios.get(`${TCGDEX_BASE}/en/dex-ids/${id}`, { timeout: 25000 }).catch(() => ({ data: { cards: [] } })),
+622:       getSetsIndex().catch(() => ({ names: new Map(), order: new Map() }))
+623:     ]);
+624: 
+625:     const deCards = (deRes.data && Array.isArray(deRes.data.cards)) ? deRes.data.cards : [];
+626:     const enCards = (enRes.data && Array.isArray(enRes.data.cards)) ? enRes.data.cards : [];
+627: 
+628:     const cardMap = new Map();
+629:     deCards.forEach((c) => { if (c && c.id) cardMap.set(c.id, c); });
+630:     enCards.forEach((c) => { if (c && c.id && !cardMap.has(c.id)) cardMap.set(c.id, c); });
+631: 
+632:     const combinedCards = Array.from(cardMap.values());
+633: 
+634:     res.json({ id, cards: briefsToCards(combinedCards, idx) });
+635:   } catch (e) {
+636:     const status = e.response?.status === 404 ? 404 : 502;
+637:     if (status === 404) return res.json({ id: parseInt(req.params.id, 10), cards: [] });
+638:     res.status(502).json({ error: 'Karten konnten nicht geladen werden.' });
+639:   }
+640: });
+641: 
+642: let pokedexCache = { at: 0, data: null };
+643: async function gql(url, query) {
+644:   const r = await axios.post(url, { query }, { timeout: 30000, headers: { 'Content-Type': 'application/json' } });
+645:   if (r.data && r.data.errors) throw new Error(JSON.stringify(r.data.errors).slice(0, 200));
+646:   return r.data.data;
+647: }
+648: 
+649: async function loadPokedex() {
+650:   const attempts = [
+651:     ['https://graphql.pokeapi.co/v1beta2', 'pokemonspecies', 'pokemonspeciesnames'],
+652:     ['https://beta.pokeapi.co/graphql/v1beta', 'pokemon_v2_pokemonspecies', 'pokemon_v2_pokemonspeciesnames']
+653:   ];
+654:   for (const [url, t, rel] of attempts) {
+655:     try {
+656:       const data = await gql(url, `{ ${t}(order_by: {id: asc}) { id ${rel}(where: {language_id: {_in: [6, 9]}}) { language_id name } } }`);
+657:       const rows = data[t] || [];
+658:       if (rows.length < 100) continue;
+659:       return { lang: 'de', list: rows.map((r) => {
+660:         const names = r[rel] || [];
+661:         const de = (names.find((n) => n.language_id === 6) || {}).name;
+662:         const en = (names.find((n) => n.language_id === 9) || {}).name;
+663:         return { id: r.id, name: de || en || `#${r.id}`, nameEn: en || de || `#${r.id}` };
+664:       }) };
+665:     } catch (e) {
+666:       console.error('Pokédex GraphQL fehlgeschlagen:', url, e.message);
+667:     }
+668:   }
+669: 
+670:   const r = await axios.get('https://pokeapi.co/api/v2/pokemon-species?limit=3000', { timeout: 30000 });
+671:   const list = (r.data.results || []).map((s) => {
+672:     const id = Number(String(s.url).split('/').filter(Boolean).pop());
+673:     const name = s.name.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('-');
+674:     return { id, name, nameEn: name };
+675:   }).filter((x) => x.id).sort((a, b) => a.id - b.id);
+676:   return { lang: 'en', list };
+677: }
+678: 
+679: app.get('/api/pokedex', async (req, res) => {
+680:   try {
+681:     if (!pokedexCache.data || Date.now() - pokedexCache.at > DAY_MS) {
+682:       pokedexCache = { at: Date.now(), data: await loadPokedex() };
+683:     }
+684:     res.json(pokedexCache.data);
+685:   } catch (e) {
+686:     console.error('Pokédex laden fehlgeschlagen:', e.message);
+687:     res.status(502).json({ error: 'Pokédex-Liste konnte nicht geladen werden.' });
+688:   }
+689: });
+690: 
+691: app.get('/api/card/:id', async (req, res) => {
+692:   try {
+693:     const id = String(req.params.id);
+694:     let card = null;
+695:     let foundLang = null;
+696: 
+697:     for (const lang of ['de', 'en']) {
+698:       try { 
+699:         card = await fetchDetail(lang, id); 
+700:         if (card) {
+701:           foundLang = lang;
+702:           break; 
+703:         }
+704:       } catch (e) {}
+705:     }
+706: 
+707:     if (!card) return res.status(404).json({ error: 'Karte nicht gefunden.' });
+708: 
+709:     card.language = foundLang;
+710: 
+711:     try {
+712:       card = await enrichWithCardmarket(card);
+713:     } catch (cmError) {
+714:       console.warn(`Cardmarket-Enrichment fehlgeschlagen für ${id}:`, cmError.message);
+715:       card.cardmarket = card.cardmarket || null;
+716:     }
+717: 
+718:     res.json(card);
+719:   } catch (e) {
+720:     console.error(`Fehler in /api/card/${req.params.id}:`, e.message);
+721:     res.status(502).json({ error: 'Karte konnte nicht geladen werden.' });
+722:   }
+723: });
+724: 
+725: const metaCache = new Map();
+726: app.post('/api/card-meta', async (req, res) => {
+727:   try {
+728:     const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+729:     const ids = [...new Set(raw.map(String))].slice(0, 60);
+730:     const meta = {};
+731:     await mapLimit(ids, 6, async (id) => {
+732:       if (metaCache.has(id)) { meta[id] = metaCache.get(id); return; }
+733:       if (id.startsWith('custom-') || id.startsWith('cm-')) { meta[id] = { dexId: [], illustrator: null }; return; }
+734:       for (const lang of ['en', 'de']) {
+735:         try {
+736:           const r = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${encodeURIComponent(id)}`, { timeout: 10000 });
+737:           const m = {
+738:             dexId: Array.isArray(r.data.dexId) ? r.data.dexId.map(Number).filter(Number.isFinite) : [],
+739:             illustrator: r.data.illustrator || null
+740:           };
+741:           metaCache.set(id, m); meta[id] = m;
+742:           return;
+743:         } catch (e) {}
+744:       }
+745:     });
+746:     res.json({ meta });
+747:   } catch (e) {
+748:     res.status(500).json({ error: 'Karten-Daten konnten nicht geladen werden.' });
+749:   }
+750: });
+751: 
+752: app.post('/api/cards/bulk', async (req, res) => {
+753:   try {
+754:     const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+755:     const ids = [...new Set(raw.map(String))].filter((id) => id && !id.startsWith('custom-')).slice(0, 40);
+756:     if (ids.length === 0) return res.status(400).json({ error: 'ids fehlen' });
+757:     await cardmarket.ready();
+758:     const found = await mapLimit(ids, 6, async (id) => {
+759:       try {
+760:         if (id.startsWith('cm-')) return cardmarket.cardOfProduct(Number(id.slice(3)));
+761:         let card = null;
+762:         for (const lang of ['de', 'en']) {
+763:           try { card = await fetchDetail(lang, id); break; } catch (e) {}
+764:         }
+765:         return card ? await enrichWithCardmarket(card) : null;
+766:       } catch (e) {
+767:         return null;
+768:       }
+769:     });
+770:     res.json({ cards: found.filter(Boolean) });
+771:   } catch (e) {
+772:     console.error('Bulk-Karten Fehler:', e.message);
+773:     res.status(500).json({ error: 'Karten konnten nicht geladen werden.' });
+774:   }
+775: });
+776: 
+777: app.get('/api/cards', async (req, res) => {
+778:   try {
+779:     const name = typeof req.query.name === 'string' ? req.query.name : '';
+780:     const set = typeof req.query.set === 'string' ? req.query.set : '';
+781: 
+782:     if (!name.trim()) {
+783:       return res.status(400).json({ error: 'Name ist erforderlich' });
+784:     }
+785: 
+786:     const parsed = parseQuery(name);
+787:     if (!parsed.name) {
+788:       return res.status(400).json({ error: 'Bitte einen Kartennamen angeben (z.B. "Glumanda 044").' });
+789:     }
+790: 
+791:     const cleanSet = set ? set.trim() : '';
+792:     let idToLang = await collectIds(parsed, cleanSet, true);
+793: 
+794:     if (idToLang.size === 0 && parsed.number) {
+795:       idToLang = await collectIds(parsed, cleanSet, false);
+796:     }
+797: 
+798:     if (idToLang.size === 0) {
+799:       return res.json(cardmarket.search(parsed.name));
+800:     }
+801: 
+802:     const entries = Array.from(idToLang.entries()).slice(0, 40);
+803: 
+804:     const detailed = await Promise.all(
+805:       entries.map(async ([id, lang]) => {
+806:         try {
+807:           return await fetchDetail(lang, id);
+808:         } catch (e) {
+809:           return null;
+810:         }
+811:       })
+812:     );
+813: 
+814:     let results = detailed.filter(Boolean);
+815:     if (results.length === 0) return res.json(cardmarket.search(parsed.name));
+816: 
+817:     if (parsed.number?.total) {
+818:       results = results.filter(c => c.set?.total == null || String(c.set.total) === parsed.number.total);
+819:     }
+820: 
+821:     results = await mapLimit(results, 8, enrichWithCardmarket);
+822: 
+823:     results.sort((a, b) =>
+824:       (a.name || '').localeCompare(b.name || '') || (a.set?.name || '').localeCompare(b.set?.name || '')
+825:     );
+826: 
+827:     return res.json(results);
+828:   } catch (error) {
+829:     console.error('Fehler bei /api/cards:', error);
+830:     return res.status(500).json({ error: 'Fehler beim Laden der Karten' });
+831:   }
+832: });
+833: 
+834: const wantCache = new Map();
+835: app.post('/api/wantlist-names', async (req, res) => {
+836:   try {
+837:     const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+838:     const ids = [...new Set(raw.map(String))].filter((id) => id && !id.startsWith('custom-') && !id.startsWith('cm-')).slice(0, 100);
+839:     const names = {};
+840:     await mapLimit(ids, 6, async (id) => {
+841:       if (wantCache.has(id)) { names[id] = wantCache.get(id); return; }
+842:       try {
+843:         const r = await axios.get(`${TCGDEX_BASE}/en/cards/${encodeURIComponent(id)}`, { timeout: 10000 });
+844:         const v = {
+845:           name: r.data.name,
+846:           set: r.data.set?.name || null,
+847:           abbr: await getSetAbbr(r.data.set?.id),
+848:           number: r.data.localId || null,
+849:           abilities: (r.data.abilities || []).map((a) => a.name).filter(Boolean),
+850:           attacks: (r.data.attacks || []).map((a) => a.name).filter(Boolean)
+851:         };
+852:         if (wantCache.size > 5000) wantCache.clear();
+853:         wantCache.set(id, v); names[id] = v;
+854:       } catch (e) {}
+855:     });
+856:     res.json({ names });
+857:   } catch (e) {
+858:     res.status(500).json({ error: 'Namen konnten nicht geladen werden.' });
+859:   }
+860: });
+861: 
+862: require('./jobs')({ cardmarket, refreshOne, mapLimit }).registerRoutes(app);
+863: 
+864: // ---------------------------------------------------------------------
+865: // Globaler Error-Handler: fängt nicht abgefangene Fehler ab und schickt
+866: // einen Discord-Alert (nicht blockierend), bevor die Antwort gesendet wird.
+867: // ---------------------------------------------------------------------
+868: app.use((err, req, res, next) => {
+869:   console.error('Unhandled error:', err.message);
+870:   sendDiscordAlert('unhandled-error', `Unhandled error on ${req.method} ${req.originalUrl}`, err).catch(() => {});
+871:   res.status(500).json({ error: 'Interner Serverfehler' });
+872: });
+873: 
+874: // Unhandled Promise Rejections ebenfalls an Discord melden
+875: process.on('unhandledRejection', (reason, promise) => {
+876:   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+877:   sendDiscordAlert('unhandled-rejection', 'Unhandled Promise Rejection', reason).catch(() => {});
+878: });
+879: 
+880: const PORT = process.env.PORT || 5000;
+881: app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));

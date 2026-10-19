@@ -1,0 +1,155 @@
+66: 
+67: // Kontingent-Anzeige und Account-Löschung (eigene Routen, mit Login geschützt)
+68: registerAccountRoutes(app);
+69: 
+70: // --- Datenquelle: TCGdex (https://tcgdex.dev) ---
+71: const TCGDEX_BASE = 'https://api.tcgdex.net/v2';
+72: 
+73: // Zweite Datenquelle (Cardmarket-Dateien) im Hintergrund laden und täglich erneuern
+74: cardmarket.init();
+75: 
+76: app.get('/api/cardmarket-status', (req, res) => res.json(cardmarket.meta));
+77: 
+78: app.get('/api/health', (req, res) => {
+79:   const mem = process.memoryUsage();
+80:   res.json({
+81:     status: 'ok',
+82:     time: new Date().toISOString(),
+83:     uptime: Math.floor((Date.now() - startTime) / 1000),
+84:     memory: {
+85:       rss: Math.round(mem.rss / 1024 / 1024),   // MB
+86:       heapUsed: Math.round(mem.heapUsed / 1024 / 1024), // MB
+87:       heapTotal: Math.round(mem.heapTotal / 1024 / 1024) // MB
+88:     },
+89:     cardmarket: cardmarket.meta
+90:   });
+91: });
+92: 
+93: // Bild-Proxy (nur TCGdex-Assets)
+94: app.get('/api/img', async (req, res) => {
+95:   try {
+96:     const u = new URL(String(req.query.u || ''));
+97:     if (u.protocol !== 'https:' || u.hostname !== 'assets.tcgdex.net') return res.status(400).end();
+98:     const r = await axios.get(u.toString(), { responseType: 'arraybuffer', timeout: 15000 });
+99:     res.set('Content-Type', r.headers['content-type'] || 'image/webp');
+100:     res.set('Cache-Control', 'public, max-age=86400');
+101:     res.send(Buffer.from(r.data));
+102:   } catch (e) {
+103:     res.status(502).end();
+104:   }
+105: });
+106: 
+107: function parseQuery(raw) {
+108:   const tokens = raw.trim().replace(/#/g, ' ').split(/\s+/).filter(Boolean);
+109:   if (tokens.length >= 2) {
+110:     const last = tokens[tokens.length - 1];
+111:     const m = last.match(/^([A-Za-z]{0,4})(\d{1,3})([A-Za-z]?)(?:\/([A-Za-z]{0,4}\d{1,3}))?$/);
+112:     if (m) {
+113:       return {
+114:         name: tokens.slice(0, -1).join(' '),
+115:         number: {
+116:           prefix: m[1].toUpperCase(),
+117:           digits: String(parseInt(m[2], 10)),
+118:           suffix: m[3].toLowerCase(),
+119:           total: m[4] ? String(parseInt(m[4].replace(/\D/g, ''), 10)) : null
+120:         }
+121:       };
+122:     }
+123:   }
+124:   return { name: tokens.join(' '), number: null };
+125: }
+126: 
+127: function splitLocalId(localId) {
+128:   const m = String(localId || '').match(/^([A-Za-z]*)(\d+)([A-Za-z]?)$/);
+129:   if (!m) return null;
+130:   return { prefix: m[1].toUpperCase(), digits: String(parseInt(m[2], 10)), suffix: m[3].toLowerCase() };
+131: }
+132: 
+133: function matchesNumber(localId, number) {
+134:   const parts = splitLocalId(localId);
+135:   if (!parts) return false;
+136:   return parts.digits === number.digits && parts.prefix === number.prefix && parts.suffix === (number.suffix || '');
+137: }
+138: 
+139: function normalizeCard(card, lang) {
+140:   const img = card.image ? `${card.image}/high.webp` : '';
+141:   const imgSmall = card.image ? `${card.image}/low.webp` : '';
+142:   const cm = card.pricing?.cardmarket || {};
+143: 
+144:   return {
+145:     id: card.id,
+146:     name: card.name,
+147:     number: card.localId || null,
+148:     images: { small: imgSmall || img, large: img },
+149:     attacks: (card.attacks || []).map(a => a.name).filter(Boolean),
+150:     set: {
+151:       id: card.set?.id || null,
+152:       name: card.set?.name || null,
+153:       total: card.set?.cardCount?.official ?? null
+154:     },
+155:     variants: card.variants || null,
+156:     dexId: Array.isArray(card.dexId) ? card.dexId.map(Number).filter(Number.isFinite) : [],
+157:     illustrator: card.illustrator || null,
+158:     cardmarket: {
+159:       url: `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(
+160:         [card.name, card.localId].filter(Boolean).join(' ')
+161:       )}`,
+162:       prices: {
+163:         trendPrice: cm.trend ?? cm.avg ?? 0,
+164:         averageSellPrice: cm.avg ?? 0,
+165:         avg1: cm.avg1 ?? 0,
+166:         avg7: cm.avg7 ?? 0,
+167:         avg30: cm.avg30 ?? 0,
+168:         low: cm.low ?? 0,
+169:         trendPriceHolo: cm['trend-holo'] ?? cm['avg-holo'] ?? 0,
+170:         avg1Holo: cm['avg1-holo'] ?? 0,
+171:         avg7Holo: cm['avg7-holo'] ?? 0,
+172:         avg30Holo: cm['avg30-holo'] ?? 0,
+173:         lowHolo: cm['low-holo'] ?? 0
+174:       }
+175:     },
+176:     _lang: lang
+177:   };
+178: }
+179: 
+180: function nameVariants(name) {
+181:   const variants = [name];
+182:   const hyphenated = name.replace(/\s+(GX|EX|V|VMAX|VSTAR|VUNION|ex)$/i, '-$1');
+183:   if (hyphenated !== name) variants.push(hyphenated);
+184:   return variants;
+185: }
+186: 
+187: async function searchBriefs(lang, name, set, numberDigits, perPage) {
+188:   try {
+189:     const params = new URLSearchParams();
+190:     params.set('name', name);
+191:     if (numberDigits) params.set('localId', numberDigits);
+192:     if (set) params.set('set.name', `like:${set}`);
+193:     params.set('pagination:itemsPerPage', String(perPage));
+194: 
+195:     const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards?${params.toString()}`, { timeout: 10000 });
+196:     return Array.isArray(res.data) ? res.data : [];
+197:   } catch (e) {
+198:     console.error(`TCGdex Brief-Suche (${lang}) fehlgeschlagen:`, e.response?.status || e.message);
+199:     return [];
+200:   }
+201: }
+202: 
+203: async function fetchDetail(lang, id) {
+204:   const res = await axios.get(`${TCGDEX_BASE}/${lang}/cards/${id}`, { timeout: 10000 });
+205:   const normalized = normalizeCard(res.data, lang);
+206: 
+207:   if (!normalized.images.small && lang !== 'en') {
+208:     try {
+209:       const enRes = await axios.get(`${TCGDEX_BASE}/en/cards/${id}`, { timeout: 10000 });
+210:       const enNormalized = normalizeCard(enRes.data, 'en');
+211:       normalized.images = enNormalized.images;
+212:     } catch (e) {}
+213:   }
+214: 
+215:   return normalized;
+216: }
+217: 
+218: async function collectIds(parsed, set, useServerNumberFilter) {
+219:   const perPage = parsed.number ? 100 : 48;
+220:   const numberDigits = parsed.number && useServerNumberFilter ? parsed.number.digits : null;
