@@ -12,10 +12,23 @@ app.set('trust proxy', 1); // hinter Render: echte Client-IP für das Rate-Limit
 const startTime = Date.now();
 
 // CORS-Einstellungen
-const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
-app.use(cors(allowedOrigins.length
-  ? { origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)) }
-  : undefined));
+// Erlaubte Origins kommen aus ALLOWED_ORIGINS (Render-Umgebungsvariable, kommagetrennt).
+// Ist sie nicht gesetzt, gilt die Default-Liste – sonst blockt der Browser die Requests
+// der neuen Domain (https://tcg-vault-blond.vercel.app) sofort mit einem CORS-Fehler.
+const DEFAULT_ORIGINS = [
+  'https://tcg-vault-blond.vercel.app',       // aktuelle Domain
+  'https://pokemon-frontend-blond.vercel.app', // alte Domain (Alias, bleibt erhalten)
+  'http://localhost:5173',                     // lokale Entwicklung (Vite)
+  'http://localhost:3000'
+];
+const envOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
+const useDefaults = envOrigins.length === 0;
+const allowedOrigins = useDefaults ? DEFAULT_ORIGINS : envOrigins;
+// Vercel-Preview-Deployments (*.vercel.app) nur im Default-Modus zulassen, damit
+// Test-Deploys funktionieren. Mit gesetzter ALLOWED_ORIGINS gilt die exakte Liste.
+const isAllowedOrigin = (origin) =>
+  allowedOrigins.includes(origin) || (useDefaults && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin));
+app.use(cors({ origin: (origin, cb) => cb(null, !origin || isAllowedOrigin(origin)) }));
 
 // Scan nur mit gültigem Firebase-Login. Steht VOR express.json, damit unangemeldete Anfragen
 // gar nicht erst ihren (bis zu 10 MB großen) Body einlesen lassen.
