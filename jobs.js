@@ -353,7 +353,7 @@ module.exports = function createJobs({ cardmarket, refreshOne, mapLimit }) {
       try {
         const db = getFirestore();
         const r = await sendToUser(db, decoded.uid, {
-          title: '🔔 Push funktioniert', body: 'So meldet dich PokéTracker, wenn ein Zielpreis erreicht ist.', url: '/?tab=watchlist', tag: 'push-test'
+          title: '🔔 Push funktioniert', body: 'So meldet dich TCG Vault, wenn ein Zielpreis erreicht ist.', url: '/?tab=watchlist', tag: 'push-test'
         });
         if (r.subs === 0) return res.status(404).json({ error: 'Für dieses Konto ist kein Gerät registriert.' });
         res.json(r);
