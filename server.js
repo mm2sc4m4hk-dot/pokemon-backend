@@ -18,7 +18,8 @@ const startTime = Date.now();
 const DEFAULT_ORIGINS = [
   'https://tcg-vault-blond.vercel.app',       // aktuelle Domain
   'https://pokemon-frontend-blond.vercel.app', // alte Domain (Alias, bleibt erhalten)
-  'http://localhost:5173',                     // lokale Entwicklung (Vite)
+  'http://localhost:5173',                     // lokale Entwicklung (Vite Dev Server)
+  'http://localhost:4173',                     // lokale Entwicklung (Vite Preview)
   'http://localhost:3000'
 ];
 const envOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
