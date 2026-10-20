@@ -2,10 +2,6 @@
 //
 // POST /api/delete-account
 //   - verlangt ein gültiges Firebase-ID-Token (requireAuth)
-//   - verlangt eine frische Anmeldung: der auth_time-Claim des Tokens darf
-//     höchstens SCAN_REAUTH_MAX_AGE_MIN (Standard 10) Minuten alt sein.
-//     Der Client holt davor per reauthenticateWithCredential /
-//     reauthenticateWithPopup einen neuen Token (getIdToken(true)).
 //   - verlangt die getippte Bestätigung "LÖSCHEN" im Body
 //   - löscht danach serverseitig: alle Firestore-Daten des Kontos
 //     (users/{uid} inkl. aller Untercollectionen), die Share-Links des Kontos
@@ -20,7 +16,6 @@ const { requireAuth } = require('./authMiddleware');
 const { db, auth } = require('./firebaseAdmin');
 const { getUsage, deleteUsage } = require('./scanQuota');
 
-const REAUTH_MAX_AGE_MIN = Math.max(1, Number(process.env.SCAN_REAUTH_MAX_AGE_MIN) || 10);
 const CONFIRM_WORD = 'LÖSCHEN';
 
 // Storage wird nur benutzt, wenn im Admin-SDK ein Bucket konfiguriert ist.
@@ -83,39 +78,6 @@ async function deleteFirestoreData(uid) {
   return { users, shares };
 }
 
-// Prüft, ob der Nutzer gerade frisch angemeldet (re-authentifiziert) wurde.
-//
-// Zwei serverseitig verifizierbare Signale werden akzeptiert:
-//  1. auth_time des ID-Tokens: Zeitpunkt der Anmeldung. Firebase setzt diesen
-//     Wert bei einer echten Re-Anmeldung (reauthenticateWithCredential /
-//     reauthenticateWithPopup) neu – ein bloßes Token-Refresh lässt ihn
-//     unverändert.
-//  2. metadata.lastLoginTime des Auth-Users (nur über das Admin-SDK lesbar):
-//     der Zeitpunkt des letzten erfolgreichen Sign-ins.
-//
-// Beide Werte kann der Client nicht fälschen – deshalb ist die Prüfung
-// auch dann sicher, wenn ein Anbieter auth_time bei der Re-Auth nicht
-// auffrischt.
-async function hasRecentAuth(uid, decodedToken) {
-  const maxAgeMs = REAUTH_MAX_AGE_MIN * 60 * 1000;
-  const now = Date.now();
-
-  const authTime = Number(decodedToken?.auth_time) * 1000;
-  if (authTime && now - authTime <= maxAgeMs && now - authTime >= -60 * 1000) return true;
-
-  try {
-    const adminAuth = auth();
-    if (!adminAuth) return false;
-    const user = await adminAuth.getUser(uid);
-    const last = user?.metadata?.lastLoginTime;
-    const t = last ? new Date(last).getTime() : 0;
-    if (t && now - t <= maxAgeMs && now - t >= -60 * 1000) return true;
-  } catch (e) {
-    console.error('Letzte Anmeldung konnte nicht geprüft werden:', e.message);
-  }
-  return false;
-}
-
 // Registriert die Routen (wird aus server.js aufgerufen).
 function registerAccountRoutes(app) {
   // Kontingent-Stand (für die Anzeige im Profil)
@@ -133,28 +95,20 @@ function registerAccountRoutes(app) {
   app.post('/api/delete-account', requireAuth, async (req, res) => {
     const uid = req.user.uid;
 
-    // 1) Frische Anmeldung verlangen (auth_time bzw. letzter Sign-in)
-    if (!(await hasRecentAuth(uid, req.user))) {
-      return res.status(401).json({
-        error: `Bitte melde dich zur Sicherheit neu an (innerhalb der letzten ${REAUTH_MAX_AGE_MIN} Minuten) und versuche es dann erneut.`,
-        code: 'reauth_required'
-      });
-    }
-
-    // 2) Getippte Bestätigung prüfen
+    // 1) Getippte Bestätigung prüfen
     const typed = String((req.body || {}).confirm || '').trim().toUpperCase();
     if (typed !== CONFIRM_WORD.toUpperCase()) {
       return res.status(400).json({ error: `Zum Löschen bitte "${CONFIRM_WORD}" eintippen.`, code: 'confirm_required' });
     }
 
     try {
-      // 3) Daten löschen (Reihenfolge: erst Daten, dann Login, damit bei einem
+      // 2) Daten löschen (Reihenfolge: erst Daten, dann Login, damit bei einem
       //    Fehler kein halb gelöschter Auth-User zurückbleibt)
       const { users, shares } = await deleteFirestoreData(uid);
       const files = await deleteStoragePrefix(`users/${uid}/`);
       await deleteUsage(uid);
 
-      // 4) Auth-User löschen
+      // 3) Auth-User löschen
       const adminAuth = auth();
       if (!adminAuth) throw new Error('Firebase Auth ist nicht konfiguriert.');
       await adminAuth.deleteUser(uid);
@@ -168,5 +122,5 @@ function registerAccountRoutes(app) {
   });
 }
 
-module.exports = { registerAccountRoutes, REAUTH_MAX_AGE_MIN };
+module.exports = { registerAccountRoutes };
 
