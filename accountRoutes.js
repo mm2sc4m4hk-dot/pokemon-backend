@@ -55,14 +55,14 @@ async function deleteFirestoreData(uid) {
   const firestore = db();
   if (!firestore) return { users: 0, shares: 0 };
 
+  // users/{uid} existiert meist nur als "Phantom-Dokument" (Daten liegen in Untercollections),
+  // deshalb NICHT auf snap.exists prüfen – recursiveDelete löscht die Untercollections trotzdem.
   let users = 0;
   try {
     const userRef = firestore.collection('users').doc(uid);
-    const snap = await userRef.get();
-    if (snap.exists) {
-      await firestore.recursiveDelete(userRef);
-      users = 1;
-    }
+    const subs = await userRef.listCollections();
+    await firestore.recursiveDelete(userRef);
+    users = subs.length;
   } catch (e) {
     console.error('Nutzerdaten konnten nicht gelöscht werden:', e.message);
     throw e;
